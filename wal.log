@@ -1,0 +1,5 @@
+ACTIVE,1,2024-11-22T10:00:00,Query: UPDATE table_name SET name='new_value' WHERE id=1,Before: [{'id': 1, 'name': 'old_value'}],After: [{'id': 1, 'name': 'new_value'}]
+COMMIT,2,2024-11-22T10:05:00,Query: INSERT INTO table_name (id, name) VALUES (2, 'another_value'),Before: [],After: [{'id': 2, 'name': 'another_value'}]
+START,3,2024-11-22T10:10:00,Query: DELETE FROM table_name WHERE id=1,Before: [{'id': 1, 'name': 'new_value'}],After: []
+ABORT,4,2024-11-22T10:15:00,Query: UPDATE table_name SET name='updated_value' WHERE id=2,Before: [{'id': 2, 'name': 'another_value'}],After: [{'id': 2, 'name': 'updated_value'}]
+END,5,2024-11-22T10:20:00,Query: SELECT * FROM table_name,Before: [],After: []
