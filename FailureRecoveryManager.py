@@ -63,8 +63,16 @@ class FailureRecoveryManager:
                     execution_results.append(execution_result)
         return execution_results
 
-    def write_log():
-        pass
+    def write_log(self, info: ExecutionResult) -> None:
+        log_entry = f"{info.message},{info.transaction_id},{info.timestamp.isoformat()},Query: {info.query},Before: {info.before.data},After: {info.data.data}"
+        
+        self.memory_wal.append(log_entry)
+        
+        if len(self.memory_wal) >= self.buffer_size:
+            with open(self.log_file, 'a') as log_file:
+                for entry in self.memory_wal:
+                    log_file.write(entry + '\n')
+            self.memory_wal.clear()
 
 
     # still a rough structure :")
