@@ -194,7 +194,7 @@ class FailureRecoveryManager:
         # for log_entry in reversed(logs):
         #     if (len(undo_list)==0):
         #         break
-            # belum kelar
+                # TODO
 
             
                 
