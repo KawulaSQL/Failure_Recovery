@@ -74,6 +74,23 @@ class FailureRecoveryManager:
                     log_file.write(entry + '\n')
             self.memory_wal.clear()
 
+    def save_checkpoint(self)-> None:
+        # This is just a rough structure waiting for the others to "agree" on how the log should look like
+        # Cek operasi yang ada di buffer, urut dari awal ke akhir, masukan ke log terlebih dahulu
+        # with open(self.log_file,"a") as log_file:
+        #   for item in buffer:
+        #       log_file.write(item+'\n')
+        # active_transaction = set()
+        # Lakukan sinkronisasi dengan storage
+        # for item in buffer:
+        #   operasi storage dengan item
+        #   active_transaction.add(item)  # setiap transaksi yang dilakukan berarti aktif
+        #   if item is commit:
+        #       active_transaction.remove(item) # ketika sudah dicommit, artinya transaksi sudah berhenti sebelum ada checkpoint
+        # with open(self.log_file,"a") as log_file:
+        #   log_file.write("checkpoint n, active transaction:"+active_transaction+"\n") # penambahan checkpoint dengan daftar transaksi aktif
+        pass
+
     # Get the table name from the query
     def get_table_name(self, query: str) -> str:
         match = re.search(r"FROM\s+(\w+)|INTO\s+(\w+)|UPDATE\s+(\w+)", query, re.IGNORECASE)
