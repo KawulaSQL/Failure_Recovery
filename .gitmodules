@@ -1,0 +1,3 @@
+[submodule "Storage_Manager"]
+	path = Storage_Manager
+	url = https://github.com/KawulaSQL/Storage_Manager.git
