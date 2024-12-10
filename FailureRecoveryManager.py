@@ -224,6 +224,11 @@ class FailureRecoveryManager:
         - Scan memory_wal
         - Abort (undo) and write on the log
         - IF UNDO LIST NOT EMPTY-Scan backwards from wal.log from last query
+        For abort normal case:
+        - Get undolist from RecoverCriteria transaction id, timestamp is not used
+        - Scan memory_wal
+        - Abort (undo) and write on the log
+        - IF UNDO LIST NOT EMPTY-Scan backwards from wal.log from last query
         - Abort (undo) and write on the log
         - Redo dilakukan di concurrency!
         """
@@ -442,6 +447,7 @@ if __name__ == "__main__":
             print("After rows count: 0")
 
     #     print("")
+    #     print("")
 
     failurerec.write_log(ExecutionResult(
                 transaction_id=1,
@@ -453,6 +459,9 @@ if __name__ == "__main__":
                 status=""
             ))
     
+    # failurerec.save_checkpoint()
+    criteria = RecoverCriteria([1,2],None)
+    failurerec.recover(criteria)
     # failurerec.save_checkpoint()
     criteria = RecoverCriteria([1,2],None)
     failurerec.recover(criteria)
