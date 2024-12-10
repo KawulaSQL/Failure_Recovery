@@ -6,7 +6,7 @@ import os
 import re
 from typing import Generic, TypeVar, List
 
-from Storage_Manager.StorageManager import StorageManager
+# from Storage_Manager.StorageManager import StorageManager
 
 T = TypeVar('T')
 
@@ -182,8 +182,7 @@ class FailureRecoveryManager:
         - No need to redo
         """
         if not os.path.exists(self.log_file):
-            print("No log file. Abort")
-            return
+            raise Exception("No log file. Abort")
 
         logs = self.parse_log_file("./wal.log")
         
@@ -195,23 +194,16 @@ class FailureRecoveryManager:
             query_words = log_entry.query.split()
             query_type = query_words[0].upper()
             table_name = self.get_table_name(log_entry.query)
-            # check RecoveryCriteria
-            # if (checkcurr_timestamp and criteria.timestamp and checkcurr_timestamp < criteria.timestamp):
-            #     print("Finish recovering based on timestamp..")
-            #     break
             
-            # if (checkcurr_transaction_id and criteria.transaction_id and checkcurr_transaction_id < criteria.transaction_id):
-            #     print("Finish recovering based on transaction_id..")
-            #     break
             undo_message = "ROLLBACK"
             print("------------------> " + log_entry.query)
             if query_type == "UPDATE":
-                print(log_entry.before)
-                undo_query = self.build_update_query(table_name, log_entry.before, log_entry.data)
+                print(log_entry.previous_data)
+                undo_query = self.build_update_query(table_name, log_entry.previous_data, log_entry.data)
             elif query_type == "INSERT":
                 undo_query = self.build_delete_query(table_name, log_entry.data)
             elif query_type == "DELETE":
-                undo_query = self.build_insert_query(table_name, log_entry.before, log_entry.data)
+                undo_query = self.build_insert_query(table_name, log_entry.previous_data, log_entry.data)
             else:
                 print("Pass")
                 continue
@@ -223,7 +215,7 @@ class FailureRecoveryManager:
                     timestamp=datetime.datetime.now(),
                     message=undo_message,
                     before=log_entry.data,
-                    data=log_entry.before,
+                    data=log_entry.previous_data,
                     query=i,
                 )
                 self.write_log(undo_log)
@@ -233,8 +225,8 @@ class FailureRecoveryManager:
         # relogquery = "UPDATE " + table_name + " WHERE " + condition
         relog = ExecutionResult("ABORT", checkcurr_transaction_id, datetime.datetime.now(), Rows([log_entry.data.data],log_entry.data.rows_count),Rows([log_entry.before.data],log_entry.before.rows_count), relogquery)
         self.write_log(relog)
-            
-        
+
+    def recoversystem(self):
         # If system fails
         """
         Redo dulu:
@@ -248,52 +240,60 @@ class FailureRecoveryManager:
         - Undo kalau ada di undo list
         - Kalau ketemu start hapus transaksi di undo list
         """
-        undo_list = []
+
+        if not os.path.exists(self.log_file):
+            print("No log file. Abort")
+            return
+
+        logs = self.parse_log_file("./wal.log")
+        
+        # Looping from the top getting all transaction id that needed to be undo
         for log_entry in logs:
-            checkcurr_timestamp = log_entry.timestamp
             checkcurr_transaction_id = log_entry.transaction_id
-            if(log_entry.message == "START" and log_entry not in undo_list):
-                undo_list.append(log_entry)
-            if (log_entry.message == "COMMIT" or log_entry.message == "ABORT"):
-                undo_list.remove(checkcurr_transaction_id)
+            if(log_entry.status == "START" and checkcurr_transaction_id not in self.undo_list):
+                self.undo_list.append(checkcurr_transaction_id)
+            if ((log_entry.status == "COMMIT" or log_entry.status == "ABORT")and log_entry in self.undo_list):
+                self.undo_list.remove(checkcurr_transaction_id)
+            print(f"Proses redo {log_entry.status} berhasil dan undo list skrg menjadi: {self.undo_list} \n")
+            
+        # for log_entry in reversed(logs):
+        #     if (len(self.undo_list)==0):
+        #         break
+        #     if (log_entry.status!="CHECKPOINT"):
+        #         checkcurr_transaction_id = log_entry.transaction_id
+        #         query_words = log_entry.query.split()
+        #         query_type = query_words[0].upper()
+        #         table_name = self.get_table_name(log_entry.query)
 
-        for log_entry in reversed(logs):
-            if (len(undo_list)==0):
-                break
-            checkcurr_timestamp = log_entry.timestamp
-            checkcurr_transaction_id = log_entry.transaction_id
-            query_words = log_entry.query.split()
-            query_type = query_words[0].upper()
-            table_name = self.get_table_name(log_entry.query)
+        #         undo_message = "ROLLBACK"
+        #         print("------------------> " + log_entry.query)
+        #         if query_type == "UPDATE":
+        #             undo_query = self.build_update_query(table_name, log_entry.before, log_entry.data)
+        #         elif query_type == "INSERT":
+        #             undo_query = self.build_delete_query(table_name, log_entry.data)
+        #         elif query_type == "DELETE":
+        #             undo_query = self.build_insert_query(table_name, log_entry.before)
+        #         else:
+        #             print("Pass")
+        #             continue
 
-            undo_message = "ROLLBACK"
-            print("------------------> " + log_entry.query)
-            if query_type == "UPDATE":
-                undo_query = self.build_update_query(table_name, log_entry.before, log_entry.data)
-            elif query_type == "INSERT":
-                undo_query = self.build_delete_query(table_name, log_entry.data)
-            elif query_type == "DELETE":
-                undo_query = self.build_insert_query(table_name, log_entry.before)
-            else:
-                print("Pass")
-                continue
-            for i in undo_query:
-                print(f"Executing undo query: {i}\n")
-                # query processor do the relog here -- TODO
-                undo_log = ExecutionResult(
-                    transaction_id=checkcurr_transaction_id,
-                    timestamp=datetime.datetime.now(),
-                    message=undo_message,
-                    before=log_entry.data,
-                    data=log_entry.before,
-                    query=i,
-                )
-                self.write_log(undo_log)
+        #     for i in undo_query:
+        #         print(f"Executing undo query: {i}\n")
+        #         # query processor do the relog here -- TODO
+        #         undo_log = ExecutionResult(
+        #             transaction_id=checkcurr_transaction_id,
+        #             timestamp=datetime.datetime.now(),
+        #             message=undo_message,
+        #             before=log_entry.data,
+        #             data=log_entry.before,
+        #             query=i,
+        #         )
+        #         self.write_log(undo_log)
 
         # TODO abort log ini masih konfyus
-        undo_query = self.build_update_query(table_name,log_entry.query)
-        relog = ExecutionResult("ABORT", checkcurr_transaction_id, datetime.datetime.now(), Rows([log_entry.data.data],log_entry.data.rows_count),Rows([log_entry.before.data],log_entry.before.rows_count), relogquery)
-        self.write_log(relog)
+        # undo_query = self.build_update_query(table_name,log_entry.query)
+        # relog = ExecutionResult("ABORT", checkcurr_transaction_id, datetime.datetime.now(), Rows([log_entry.data.data],log_entry.data.rows_count),Rows([log_entry.before.data],log_entry.before.rows_count), relogquery)
+        # self.write_log(relog)
                 
 
             
@@ -311,30 +311,30 @@ if __name__ == "__main__":
     print("\nExecution Result:")
     res = failurerec.parse_log_file("./wal.log")
     for i in res:
-        print("Message: " + str(i.status))
+        print("Status: " + str(i.status))
         print("Transaction id: " + str(i.transaction_id))
         print("Timestamp: " + str(i.timestamp))
         print("Query: " + str(i.query))
 
         # Check if previous data exists before accessing it
         if i.previous_data is not None:
-            print("Before data: " + str(i.previous_data.data))
-            print("Before rows count: " + str(i.previous_data.rows_count))
+            print("Previous data: " + str(i.previous_data.data))
+            print("Previous rows count: " + str(i.previous_data.rows_count))
         else:
-            print("Before data: None")
-            print("Before rows count: 0")
+            print("Previous data: None")
+            print("Previous rows count: 0")
 
         # Check if updated data exists before accessing it
         if i.updated_data is not None:
-            print("After data: " + str(i.updated_data.data))
-            print("After rows count: " + str(i.updated_data.rows_count))
+            print("Updated data: " + str(i.updated_data.data))
+            print("Updated data rows count: " + str(i.updated_data.rows_count))
         else:
             print("After data: None")
             print("After rows count: 0")
 
         print("")
-
-    # failurerec.recover(None)
+    print(failurerec.undo_list)
+    failurerec.recoversystem()
 
 """ Cek recover pakai ini dah So far udh aman
 ACTIVE,1,2024-11-22T10:00:00,Query: UPDATE table_name SET name='new_value' WHERE id=1,Before: [{'id': 1, 'name': 'old_value'}],After: [{'id': 1, 'name': 'new_value'}]
@@ -345,4 +345,13 @@ COMMIT,2,2024-11-22T10:05:00,Query: INSERT INTO table_name (id, name) VALUES (2,
 ABORT,4,2024-11-22T10:15:00,Query: UPDATE table_name SET name='updated_value' WHERE name='another_value',Before: [{'id': 2, 'name': 'another_value'},{'id': 3, 'name': 'another_value'}],After: [{'id': 2, 'name': 'updated_value'},{'id': 3, 'name': 'updated_value'}]
 ABORT,5,2024-11-22T10:15:00,Query: UPDATE table_name SET name='updated_value' WHERE name='another_value',Before: [{'id': 2, 'name': 'another_value'},{'id': 3, 'name': 'another_value'}],After: [{'id': 2, 'name': 'updated_value'},{'id': 3, 'name': 'updated_value'}]
 END,6,2024-11-22T10:20:00,Query: SELECT * FROM table_name,Before: [],After: []
+"""
+
+"""
+
+COMMIT,2,2024-11-22T10:05:00,None,Before: [],After: []
+ROLLBACK,2,2024-11-22T10:05:00,None,Before: [],After: []
+START,3,2024-11-22T10:10:00,DELETE FROM table_name WHERE id=1,Before: [{'id': 1, 'name': 'new_value'}],After: []
+ABORT,4,2024-11-22T10:15:00,None,Before: [],After: []
+CHECKPOINT,2024-11-22T10:20:00,[1,2]
 """
