@@ -17,10 +17,11 @@ class TestFailureRecoveryManager(unittest.TestCase):
             ExecutionResult(
                 transaction_id=1,
                 timestamp=fixed_time,
-                status="ACTIVE",
-                before=Rows([{'id': 1, 'name': 'old_value'}], 1),
-                after=Rows([{'id': 1, 'name': 'new_value'}], 1),
-                query="UPDATE table_name SET name='new_value' WHERE id=1"
+                type="ACTIVE",
+                previous_data=Rows([{'id': 1, 'name': 'old_value'}], 1),
+                new_data=Rows([{'id': 1, 'name': 'new_value'}], 1),
+                query="UPDATE table_name SET name='new_value' WHERE id=1",
+                status=""
             )
         ]
 
@@ -58,17 +59,18 @@ class TestFailureRecoveryManager(unittest.TestCase):
             # Assert
             self.assertEqual(len(results), 2)
             self.assertEqual(results[0].transaction_id, 1)
-            self.assertEqual(results[1].status, "CHECKPOINT")
+            self.assertEqual(results[1].type, "CHECKPOINT")
 
     def test_write_log_commit(self):
         # Arrange
         execution_result = ExecutionResult(
             transaction_id=1,
             timestamp=datetime.now(),
-            status="COMMIT",
-            before=Rows([{'id': 1, 'name': 'old_value'}], 1),
-            after=Rows([{'id': 1, 'name': 'new_value'}], 1),
-            query="UPDATE table_name SET name='new_value' WHERE id=1"
+            type="COMMIT",
+            previous_data=Rows([{'id': 1, 'name': 'old_value'}], 1),
+            new_data=Rows([{'id': 1, 'name': 'new_value'}], 1),
+            query="UPDATE table_name SET name='new_value' WHERE id=1",
+            status=""
         )
         self.manager.memory_wal.append(execution_result)
 
