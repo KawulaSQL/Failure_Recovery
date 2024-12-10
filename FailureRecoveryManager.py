@@ -4,6 +4,7 @@ sys.path.append('./Storage_Manager')
 import datetime
 import os
 import re
+import threading
 from typing import Generic, TypeVar, List
 
 from Storage_Manager.StorageManager import StorageManager
@@ -27,16 +28,16 @@ from RecoverCriteria import RecoverCriteria
 
 class FailureRecoveryManager:
     def __init__(self, base_path: str, log_file='wal.log', log_size=50):
-        self.memory_wal = []  # In-memory WAL
+        self.memory_wal = []
         self.undo_list = []
         self.log_file = log_file
-        self.buffer = []  # Buffer to hold modified data
+        self.buffer = []
         self.wal_size = log_size
         self.last_checkpoint_time = datetime.datetime.now()
         self.checkpoint_interval = datetime.timedelta(minutes=5)
+        self.lock = threading.Lock() 
         # self.storage_manager = StorageManager(base_path)
-        
-        # Initialize log file if they don't exist
+
         if not os.path.exists(self.log_file):
             with open(self.log_file, 'w') as f:
                 pass
@@ -45,7 +46,6 @@ class FailureRecoveryManager:
         execution_results = []
         with open(file_path, 'r') as file:
             for line in file:
-                # Check for checkpoint entry
                 if line.startswith('CHECKPOINT'):
                     match = re.match(r"CHECKPOINT,([\d\-T:]+),(\[.*\])", line)
                     if match:
@@ -62,7 +62,6 @@ class FailureRecoveryManager:
                         )
                         execution_results.append(execution_result)
                 else:
-                    # Parse active, commit, start, abort, etc.
                     match = re.match(r"(\w+),(\d+),([\d\-T:]+),(.+?),Before: (.*?),After: (.*)", line)
                     if match:
                         status = match.group(1)
@@ -88,49 +87,60 @@ class FailureRecoveryManager:
         return execution_results
 
     def write_log(self, info: ExecutionResult) -> None:
-        self.memory_wal.append(info)
+        with self.lock:
+            self.memory_wal.append(info)
 
-        if info.status == "COMMIT":
-            with open(self.log_file, 'a') as log_file:
-                for entry in self.memory_wal:
-                    query_value = entry.query if entry.query else "None"  
-                    log_entry = f"{entry.status},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data},After: {entry.updated_data}"
-                    log_file.write(log_entry + '\n')
+            if info.status == "COMMIT":
+                with open(self.log_file, 'a') as log_file:
+                    for entry in self.memory_wal:
+                        query_value = entry.query if entry.query else "None"  
+                        log_entry = f"{entry.status},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.updated_data.data}"
+                        log_file.write(log_entry + '\n')
 
-            self.memory_wal.clear()
+                self.memory_wal.clear()
 
-            if info.transaction_id in self.undo_list:
-                self.undo_list.remove(info.transaction_id)
+                if info.transaction_id in self.undo_list:
+                    self.undo_list.remove(info.transaction_id)
 
-        if len(self.memory_wal) >= self.buffer_size and info.status != "COMMIT":
-            with open(self.log_file, 'a') as log_file:
-                for entry in self.memory_wal:
-                    query_value = entry.query if entry.query else "None"  
-                    log_entry = f"{entry.status},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data},After: {entry.after.updated_data}"
-                    log_file.write(log_entry + '\n')
+            if len(self.memory_wal) >= self.wal_size and info.status != "COMMIT":
+                with open(self.log_file, 'a') as log_file:
+                    for entry in self.memory_wal:
+                        query_value = entry.query if entry.query else "None"  
+                        log_entry = f"{entry.status},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.updated_data.data}"
+                        log_file.write(log_entry + '\n')
 
-            self.memory_wal.clear()
+                self.memory_wal.clear()
 
-        if info.status != "COMMIT": 
-            self.undo_list.append(info.transaction_id)
+            if info.status != "COMMIT": 
+                if info.transaction_id not in self.undo_list:
+                    self.undo_list.append(info.transaction_id)
 
 
     def save_checkpoint(self) -> None:
-      
-        if self.memory_wal:
-            with open(self.log_file, "a") as log_file:
-                for entry in self.memory_wal:
-                    query_value = entry.query if entry.query else "None"  
-                    log_entry = f"{entry.status},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.before.data},After: {entry.after.data}"
-                    log_file.write(log_entry + '\n')
+        with self.lock:
+            if self.memory_wal:
+                with open(self.log_file, "a") as log_file:
+                    for entry in self.memory_wal:
+                        query_value = entry.query if entry.query else "None"  
+                        log_entry = f"{entry.status},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.updated_data.data}"
+                        log_file.write(log_entry + '\n')
 
-        # Add a checkpoint entry to the log file with the undo_list
-        with open(self.log_file, "a") as log_file:
-            checkpoint_entry = f"CHECKPOINT,{datetime.datetime.now().isoformat()},{self.undo_list}"
-            log_file.write(checkpoint_entry + '\n')
-        if hasattr(self, "storage_manager"):
-            self.storage_manager.write_buffer(self.memory_wal)
-        self.memory_wal.clear()
+            with open(self.log_file, "a") as log_file:
+                checkpoint_entry = f"CHECKPOINT,{datetime.datetime.now().isoformat()},{self.undo_list}"
+                log_file.write(checkpoint_entry + '\n')
+            if hasattr(self, "storage_manager"):
+                self.storage_manager.write_buffer(self.buffer)
+            self.memory_wal.clear()
+
+    def start_checkpointing(self):
+        def checkpoint_loop():
+            while True:
+                datetime.time.sleep(300)  # Wait for 5 minutes (300 seconds)
+                print("Running checkpoint...")
+                self.save_checkpoint()
+                print("Checkpoint saved.")
+
+        threading.Thread(target=checkpoint_loop, daemon=True).start()
 
     # Get the table name from the query
     def get_table_name(self, query: str) -> str:
@@ -333,6 +343,17 @@ if __name__ == "__main__":
             print("After rows count: 0")
 
         print("")
+
+    failurerec.write_log(ExecutionResult(
+                transaction_id=1,
+                timestamp=datetime.datetime.now(),
+                status="ACTIVE",
+                before=Rows([{'id': 1, 'name': 'old_value'}], 1),
+                after=Rows([{'id': 1, 'name': 'new_value'}], 1),
+                query="UPDATE table_name SET name='new_value' WHERE id=1"
+            ))
+    
+    failurerec.save_checkpoint()
 
     # failurerec.recover(None)
 
