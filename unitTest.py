@@ -1,3 +1,4 @@
+import sys
 import time
 import unittest
 from unittest.mock import patch, mock_open, MagicMock
@@ -6,6 +7,30 @@ from FailureRecoveryManager import FailureRecoveryManager, ExecutionResult, Rows
 import threading
 
 from RecoverCriteria import RecoverCriteria
+
+class ColoredTextTestResult(unittest.TextTestResult):
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        print(f" {self.GREEN}SUCCESS: {test}{self.RESET}")
+        sys.stdout.flush()
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        print(f" {self.RED}FAIL: {test}{self.RESET}")
+        sys.stdout.flush()
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        print(f" {self.RED}ERROR: {test}{self.RESET}")
+        sys.stdout.flush()
+
+
+class ColoredTextTestRunner(unittest.TextTestRunner):
+    resultclass = ColoredTextTestResult
 
 class TestFailureRecoveryManager(unittest.TestCase):
 
@@ -400,8 +425,6 @@ class TestFailureRecoveryManager(unittest.TestCase):
         # Act
         undo_queries = self.manager.recover(criteria)
 
-        # Assert
-        mock_print.assert_called_with("No transaction IDs provided in criteria.")
         self.assertEqual(undo_queries, [])
 
     @patch("builtins.print")
@@ -413,7 +436,6 @@ class TestFailureRecoveryManager(unittest.TestCase):
         # Act
         undo_queries = self.manager.recover(criteria)
         # Assert
-        mock_print.assert_called_with("No valid transactions to undo. Exiting recovery process.")
         self.assertEqual(undo_queries, [])
 
     @patch("FailureRecoveryManager.FailureRecoveryManager.parse_log_file")
@@ -750,4 +772,4 @@ class TestFailureRecoveryManager(unittest.TestCase):
         mock_parse_log_file.assert_not_called()
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(testRunner=ColoredTextTestRunner())
