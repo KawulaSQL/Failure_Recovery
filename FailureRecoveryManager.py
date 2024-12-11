@@ -8,7 +8,7 @@ import threading
 from typing import Generic, Optional, TypeVar, List, Dict, Union
 from dataclasses import dataclass
 from Storage_Manager.StorageManager import StorageManager
-
+import time 
 T = TypeVar('T')
 
 @dataclass
@@ -31,9 +31,12 @@ class ExecutionResult:
 from RecoverCriteria import RecoverCriteria
 
 class FailureRecoveryManager:
-        # Class-level attributes
+    # Class-level attributes
     _checkpoint_thread_started = False
     _checkpoint_lock = threading.Lock()
+    _instances = []
+    _shutdown_event = threading.Event()
+    _checkpoint_thread = None
 
     def __init__(self, base_path: str, log_file='wal.log', log_size=50):
         self.memory_wal: List[ExecutionResult] = []
@@ -48,6 +51,8 @@ class FailureRecoveryManager:
         if not os.path.exists(self.log_file):
             with open(self.log_file, 'w') as f:
                 pass
+        with FailureRecoveryManager._checkpoint_lock:
+            FailureRecoveryManager._instances.append(self)
 
         # Start the checkpointing thread if not already started
         self._start_checkpointing_thread()
@@ -58,7 +63,7 @@ class FailureRecoveryManager:
         with cls._checkpoint_lock:  # Ensure thread-safe initialization
             if not cls._checkpoint_thread_started:
                 print("Starting checkpointing thread...")
-                threading.Thread(target=cls._checkpoint_loop, daemon=True, args=(cls,)).start()
+                threading.Thread(target=cls._checkpoint_loop, daemon=True).start()
                 cls._checkpoint_thread_started = True
             else:
                 print("Checkpointing thread already running.")
@@ -67,58 +72,85 @@ class FailureRecoveryManager:
     def _checkpoint_loop(cls):
         """Thread loop for checkpointing."""
         while True:
-            datetime.time.sleep(300) 
-            print("Running checkpoint...")
-            # Iterate over instances and save checkpoint
-            for instance in cls._instances:
-                instance.save_checkpoint()
-            print("Checkpoint saved.")
+            try:
+                time.sleep(300)  # Corrected to use time.sleep
+                print("Running checkpoint...")
+                # Iterate over instances and save checkpoint
+                with cls._checkpoint_lock:
+                    for instance in cls._instances:
+                        try:
+                            instance.save_checkpoint()
+                        except Exception as e:
+                            print(f"Error during checkpointing for instance {instance}: {e}")
+                print("Checkpoint saved.")
+            except Exception as e:
+                print(f"Error in checkpoint loop: {e}")
+    
+    @classmethod
+    def shutdown(cls):
+        """Signal the checkpointing thread to terminate."""
+        cls._shutdown_event.set()
+        if cls._checkpoint_thread is not None:
+            cls._checkpoint_thread.join(timeout=1)  # Wait briefly for thread to exit
+            cls._checkpoint_thread = None
+        cls._checkpoint_thread_started = False
+        cls._instances.clear()
          
     def parse_log_file(self, file_path: str) -> List[ExecutionResult]:
         execution_results = []
-        with open(file_path, 'r') as file:
-            for line in file:
-                if line.startswith('CHECKPOINT'):
-                    match = re.match(r"CHECKPOINT,([\d\-T:]+),(\[.*\])", line)
-                    if match:
-                        timestamp = datetime.datetime.fromisoformat(match.group(1))
-                        undo_list = eval(match.group(2))  
-                        self.undo_list.extend(undo_list)  
-                        execution_result = ExecutionResult(
-                            transaction_id=None, 
-                            timestamp=timestamp,
-                            type='CHECKPOINT',
-                            query=None, 
-                            previous_data=None,
-                            new_data=None,
-                            status=None
-                        )
-                        execution_results.append(execution_result)
-                else:
-                    match = re.match(r"(\w+),(\d+),([\d\-T:]+),(.+?),Before: (.*?),After: (.*)", line)
-                    if match:
-                        type = match.group(1)
-                        transaction_id = int(match.group(2))
-                        timestamp = datetime.datetime.fromisoformat(match.group(3))
-                        query = None if match.group(4) == "None"  else match.group(4)
+        try:
+            with self.lock:  # Protecting any modifications
+                with open(file_path, 'r') as file:
+                    for line in file:
+                        if line.startswith('CHECKPOINT'):
+                            match = re.match(r"CHECKPOINT,([\d\-T:]+),(\[.*\])", line)
+                            if match:
+                                timestamp = datetime.datetime.fromisoformat(match.group(1))
+                                try:
+                                    undo_list = eval(match.group(2))  
+                                    self.undo_list.extend(undo_list)  
+                                    execution_result = ExecutionResult(
+                                        transaction_id=None, 
+                                        timestamp=timestamp,
+                                        type='CHECKPOINT',
+                                        query=None, 
+                                        previous_data=None,
+                                        new_data=None,
+                                        status=None
+                                    )
+                                    execution_results.append(execution_result)
+                                except Exception as e:
+                                    print(f"Error parsing CHECKPOINT line: {e}")
+                        else:
+                            match = re.match(r"(\w+),(\d+),([\d\-T:]+),(.+?),Before: (.*?),After: (.*)", line)
+                            if match:
+                                type = match.group(1)
+                                transaction_id = int(match.group(2))
+                                timestamp = datetime.datetime.fromisoformat(match.group(3))
+                                query = None if match.group(4) == "None"  else match.group(4)
+                                try:
+                                    before_data = eval(match.group(5))  
+                                    after_data = eval(match.group(6))   
 
-                        before_data = eval(match.group(5))  
-                        after_data = eval(match.group(6))   
+                                    before_rows = Rows(data=before_data, rows_count=len(before_data))
+                                    after_rows = Rows(data=after_data, rows_count=len(after_data))
 
-                        before_rows = Rows(data=before_data, rows_count=len(before_data))
-                        after_rows = Rows(data=after_data, rows_count=len(after_data))
-
-                        execution_result = ExecutionResult(
-                            transaction_id=transaction_id,
-                            timestamp=timestamp,
-                            status="",
-                            query=query,  
-                            previous_data=before_rows,
-                            new_data=after_rows,
-                            type=type
-                        )
-                        execution_results.append(execution_result)
-        return execution_results
+                                    execution_result = ExecutionResult(
+                                        transaction_id=transaction_id,
+                                        timestamp=timestamp,
+                                        status="",
+                                        query=query,  
+                                        previous_data=before_rows,
+                                        new_data=after_rows,
+                                        type=type
+                                    )
+                                    execution_results.append(execution_result)
+                                except Exception as e:
+                                    print(f"Error parsing log entry: {e}")
+                return execution_results
+        except Exception as e:
+            print(f"Error reading log file {file_path}: {e}")
+            return []
 
     def get_buffer(self):
         return self.buffer()
@@ -131,50 +163,70 @@ class FailureRecoveryManager:
 
 
     def write_log(self, info: ExecutionResult) -> None:
-        with self.lock:
-            self.memory_wal.append(info)
+        try:
+            with self.lock:
+                self.memory_wal.append(info)
 
-            if info.type == "COMMIT":
-                with open(self.log_file, 'a') as log_file:
-                    for entry in self.memory_wal:
-                        query_value = entry.query if entry.query else "None"  
-                        log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
-                        log_file.write(log_entry + '\n')
+                if info.type == "COMMIT":
+                    try:
+                        with open(self.log_file, 'a') as log_file:
+                            for entry in self.memory_wal:
+                                query_value = entry.query if entry.query else "None"  
+                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
+                                log_file.write(log_entry + '\n')
 
-                self.memory_wal.clear()
+                        self.memory_wal.clear()
 
-                if info.transaction_id in self.undo_list:
-                    self.undo_list.remove(info.transaction_id)
+                        if info.transaction_id in self.undo_list:
+                            self.undo_list.remove(info.transaction_id)
+                    except Exception as e:
+                        print(f"Error writing COMMIT log: {e}")
 
-            if len(self.memory_wal) >= self.wal_size and info.type != "COMMIT":
-                with open(self.log_file, 'a') as log_file:
-                    for entry in self.memory_wal:
-                        query_value = entry.query if entry.query else "None"  
-                        log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
-                        log_file.write(log_entry + '\n')
+                if len(self.memory_wal) >= self.wal_size and info.type != "COMMIT":
+                    try:
+                        with open(self.log_file, 'a') as log_file:
+                            for entry in self.memory_wal:
+                                query_value = entry.query if entry.query else "None"  
+                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
+                                log_file.write(log_entry + '\n')
 
-                self.memory_wal.clear()
+                        self.memory_wal.clear()
+                    except Exception as e:
+                        print(f"Error writing WAL log: {e}")
 
-            if info.type != "COMMIT": 
-                if info.transaction_id not in self.undo_list:
-                    self.undo_list.append(info.transaction_id)
+                if info.type != "COMMIT": 
+                    if info.transaction_id not in self.undo_list:
+                        self.undo_list.append(info.transaction_id)
+        except Exception as e:
+            print(f"Error in write_log: {e}")
 
 
     def save_checkpoint(self) -> None:
-        with self.lock:
-            if self.memory_wal:
-                with open(self.log_file, "a") as log_file:
-                    for entry in self.memory_wal:
-                        query_value = entry.query if entry.query else "None"  
-                        log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
-                        log_file.write(log_entry + '\n')
+        try:
+            with self.lock:
+                if self.memory_wal:
+                    try:
+                        with open(self.log_file, "a") as log_file:
+                            for entry in self.memory_wal:
+                                query_value = entry.query if entry.query else "None"  
+                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
+                                log_file.write(log_entry + '\n')
+                    except Exception as e:
+                        print(f"Error writing WAL during checkpoint: {e}")
+                try:        
+                    with open(self.log_file, "a") as log_file:
+                        checkpoint_entry = f"CHECKPOINT,{datetime.datetime.now().isoformat()},{self.undo_list}"
+                        log_file.write(checkpoint_entry + '\n')
+                except Exception as e:
+                    print(f"Error writing CHECKPOINT log: {e}")
+                # try:
+                #     self.storage_manager.write_buffer(self.buffer)
+                # except Exception as e:
+                #     print(f"Error writing buffer to storage manager: {e}")
 
-            with open(self.log_file, "a") as log_file:
-                checkpoint_entry = f"CHECKPOINT,{datetime.datetime.now().isoformat()},{self.undo_list}"
-                log_file.write(checkpoint_entry + '\n')
-            if hasattr(self, "storage_manager"):
-                self.storage_manager.write_buffer(self.buffer)
-            self.memory_wal.clear()
+                self.memory_wal.clear()
+        except Exception as e:
+            print(f"Error in save_checkpoint: {e}")
 
     # Get the table name from the query
     def get_table_name(self, query: str) -> str:
@@ -191,7 +243,6 @@ class FailureRecoveryManager:
             condition = " AND ".join(f"{k}='{v}'" for k, v in after_row.items())
             query = f"UPDATE {table_name} SET {set_clause} WHERE {condition};"
             queries.append(query)
-        
         return queries
 
     # Build a DELETE query to undo an INSERT operation
@@ -202,12 +253,12 @@ class FailureRecoveryManager:
     # Build an INSERT query to undo a DELETE operation
     def build_insert_query(self, table_name: str, before: Rows, after: Rows) -> List[str]:
         if not before.data:
-            return ""
-        after_set = {tuple(row.items()) for row in after.data}
+            return []
+        after_set = {tuple(row.items()) for row in after.data} if after and after.data else set()
         filtered_before = [row for row in before.data if tuple(row.items()) not in after_set]
 
         if not filtered_before:
-            return "" 
+            return [] 
 
         columns = ", ".join(filtered_before[0].keys())
         values_list = [
@@ -215,6 +266,7 @@ class FailureRecoveryManager:
             for row in filtered_before
         ]
         return [f"INSERT INTO {table_name} ({columns}) VALUES {', '.join(values_list)};"]
+    
     
     def recover(self, criteria:RecoverCriteria):
         """
@@ -232,101 +284,103 @@ class FailureRecoveryManager:
         - Abort (undo) and write on the log
         - Redo dilakukan di concurrency!
         """
-        if not criteria.transaction_id:
-            print("No transaction IDs provided in criteria.")
-            return []
-        with self.lock:
-            valid_transaction_ids = [tid for tid in criteria.transaction_id if tid in self.undo_list]
-
-            if not valid_transaction_ids:
-                print("No valid transactions to undo. Exiting recovery process.")
+        try:
+            if not criteria.transaction_id:
+                print("No transaction IDs provided in criteria.")
                 return []
+            with self.lock:
+                valid_transaction_ids = [tid for tid in criteria.transaction_id if tid in self.undo_list]
 
-            print(f"Transactions to undo: {valid_transaction_ids}")
-            undo_list = valid_transaction_ids
-            undo_queries = []  # List of undo queries to return
-            # Scan memory_wal
-            # If the transaction id that we want to undo is now empty then stop
-            done_undo = False
-            for exec_result in self.memory_wal:
-                if (len(undo_list)==0):
-                    done_undo = True
-                    print("Undo list is now empty, stop recovery")
-                    break   
-                if (checkcurr_transaction_id in undo_list):
-                    print("------------------> " + exec_result.query)
-                    if exec_result.status == "START":
-                        print("Found the start for the transaction_id: "+ checkcurr_transaction_id)
-                        undo_list.remove(checkcurr_transaction_id)
-                    elif exec_result.status == "UPDATE":
-                        print(exec_result.previous_data)
-                        undo_query = self.build_update_query(table_name, exec_result.previous_data, exec_result.updated_data)
-                    elif exec_result.status == "INSERT":
-                        undo_query = self.build_delete_query(table_name, exec_result.updated_data)
-                    elif exec_result.status == "DELETE":
-                        undo_query = self.build_insert_query(table_name, exec_result.previous_data, exec_result.updated_data)
-                    else:
-                        print("Not a valid query")
-                        continue
-                    for i in undo_query:
-                        print(f"Executing undo query: {i}\n") 
-                        # undo_log = ExecutionResult(
-                        #     transaction_id=checkcurr_transaction_id,
-                        #     timestamp=datetime.datetime.now(),
-                        #     message="ROLLBACK",
-                        #     before=exec_result.updated_data,
-                        #     data=exec_result.previous_data,
-                        #     query=i,
-                        # )
-                        # self.write_log(undo_log)   
-                        undo_queries.append(i)  
+                if not valid_transaction_ids:
+                    print("No valid transactions to undo. Exiting recovery process.")
+                    return []
 
-            # If we still cannot find START for every transaction_id in memory_wal
-            # READ .LOG FILE
-            print("Akan melakukan pembacaan dari wal.log")
-            if (done_undo==False):
-                if not os.path.exists(self.log_file):
-                    raise Exception("No log file. Abort")
-                logs = self.parse_log_file("./wal.log")
-                for log_entry in reversed(logs):
-                    checkcurr_transaction_id = log_entry.transaction_id
-                    print("\nNow Running: "+ log_entry.status + " " + str(log_entry.transaction_id))
+                print(f"Transactions to undo: {valid_transaction_ids}")
+                undo_list = valid_transaction_ids
+                undo_queries = []  # List of undo queries to return
+                # Scan memory_wal
+                # If the transaction id that we want to undo is now empty then stop
+                done_undo = False
+                for exec_result in reversed(self.memory_wal):
                     if (len(undo_list)==0):
                         done_undo = True
                         print("Undo list is now empty, stop recovery")
-                        break
-                    if(log_entry.query!=None):
-                        if (checkcurr_transaction_id in undo_list):
-                            table_name = self.get_table_name(log_entry.query)
-                            print("------------------> " + log_entry.query)
-                            query_type = log_entry.query.split()[0]
-                            if query_type == "UPDATE":
-                                undo_query = self.build_update_query(table_name, log_entry.previous_data, log_entry.updated_data)
-                            elif query_type == "INSERT":
-                                undo_query = self.build_delete_query(table_name, log_entry.updated_data)
-                            elif query_type == "DELETE":
-                                undo_query = self.build_insert_query(table_name, log_entry.previous_data, log_entry.updated_data)
-                            else:
-                                print("Not a valid query got:",log_entry.query)
-                                continue
-                            for i in undo_query:
-                                print(f"Executing undo query: {i}\n") 
-                                # undo_log = ExecutionResult(
-                                #     transaction_id=checkcurr_transaction_id,
-                                #     timestamp=datetime.datetime.now(),
-                                #     status="ROLLBACK",
-                                #     before=log_entry.updated_data,
-                                #     after=log_entry.previous_data,
-                                #     query=i,
-                                # )
-                                # self.write_log(undo_log)
-                                undo_queries.append(i) 
-                    else:
-                        if log_entry.status == "START" and checkcurr_transaction_id in undo_list:
+                        break   
+                    checkcurr_transaction_id = exec_result.transaction_id
+                    if (checkcurr_transaction_id in undo_list):
+                        if exec_result.type == "START":
                             print("Found the start for the transaction_id: "+ str(checkcurr_transaction_id))
                             undo_list.remove(checkcurr_transaction_id)
+                            undo_query= []
+                        elif exec_result.type == "UPDATE":
+                            print(exec_result.previous_data)
+                            table_name = self.get_table_name(exec_result.query)
+                            undo_query = self.build_update_query(table_name, exec_result.previous_data, exec_result.new_data)
+                        elif exec_result.type == "INSERT":
+                            table_name = self.get_table_name(exec_result.query)
+                            undo_query = self.build_delete_query(table_name, exec_result.new_data)
+                        elif exec_result.type == "DELETE":
+                            table_name = self.get_table_name(exec_result.query)
+                            undo_query = self.build_insert_query(table_name, exec_result.previous_data, exec_result.new_data)
+                        else:
+                            print("Not a valid query")
+                            continue
+                        for i in undo_query:
+                            print(f"Executing undo query: {i}\n")  
+                            undo_queries.append(i)  
 
-            return undo_queries
+                # If we still cannot find START for every transaction_id in memory_wal
+                # READ .LOG FILE
+                if len(undo_list) == 0:
+                    done_undo = True
+
+                if (done_undo==False):
+                    print("Akan melakukan pembacaan dari wal.log")
+                    if not os.path.exists(self.log_file):
+                        raise Exception("No log file. Abort")
+                    logs = self.parse_log_file("./wal.log")
+                    for log_entry in reversed(logs):
+                        checkcurr_transaction_id = log_entry.transaction_id
+                        print("\nNow Running: "+ log_entry.type + " " + str(log_entry.transaction_id))
+                        if (len(undo_list)==0):
+                            done_undo = True
+                            print("Undo list is now empty, stop recovery")
+                            break
+                        if(log_entry.query!=None):
+                            if (checkcurr_transaction_id in undo_list):
+                                table_name = self.get_table_name(log_entry.query)
+                                print("------------------> " + log_entry.query)
+                                query_type = log_entry.query.split()[0]
+                                if query_type == "UPDATE":
+                                    undo_query = self.build_update_query(table_name, log_entry.previous_data, log_entry.new_data)
+                                elif query_type == "INSERT":
+                                    undo_query = self.build_delete_query(table_name, log_entry.new_data)
+                                elif query_type == "DELETE":
+                                    undo_query = self.build_insert_query(table_name, log_entry.previous_data, log_entry.new_data)
+                                else:
+                                    print("Not a valid query got:",log_entry.query)
+                                    continue
+                                for i in undo_query:
+                                    print(f"Executing undo query: {i}\n") 
+                                    # undo_log = ExecutionResult(
+                                    #     transaction_id=checkcurr_transaction_id,
+                                    #     timestamp=datetime.datetime.now(),
+                                    #     type="ROLLBACK",
+                                    #     before=log_entry.new_data,
+                                    #     after=log_entry.previous_data,
+                                    #     query=i,
+                                    # )
+                                    # self.write_log(undo_log)
+                                    undo_queries.append(i) 
+                        else:
+                            if log_entry.type == "START" and checkcurr_transaction_id in undo_list:
+                                print("Found the start for the transaction_id: "+ str(checkcurr_transaction_id))
+                                undo_list.remove(checkcurr_transaction_id)
+
+                return undo_queries
+        except Exception as e:
+            print(f"Error during recovery: {e}")
+            return []
         # Write ABORT log
         # abort_log = ExecutionResult(
         #     transaction_id=checkcurr_transaction_id,
@@ -340,83 +394,86 @@ class FailureRecoveryManager:
         
     def recoverSystem(self):
         # Parse the log file to retrieve all logs
-        with self.lock:
-            logs = self.parse_log_file("./wal.log")
-            if not logs:
-                print("No logs found for recovery.")
-                return
+        try:
+            with self.lock:
+                logs = self.parse_log_file("./wal.log")
+                if not logs:
+                    print("No logs found for recovery.")
+                    return
 
-            # REDO Phase
-            print("Starting REDO phase...")
-            last_checkpoint = None
-            for log in reversed(logs):
-                if log.type == "CHECKPOINT":
-                    last_checkpoint = log
+                # REDO Phase
+                print("Starting REDO phase...")
+                last_checkpoint = None
+                for log in reversed(logs):
+                    if log.type == "CHECKPOINT":
+                        last_checkpoint = log
 
-            redo_start_index = logs.index(last_checkpoint) + 1 if last_checkpoint else 0
+                redo_start_index = logs.index(last_checkpoint) + 1 if last_checkpoint else 0
 
-            # Perform REDO
-            for log in logs[redo_start_index:]:
-                if log.type in ("COMMIT", "ABORT"):
+                # Perform REDO
+                for log in logs[redo_start_index:]:
+                    if log.type in ("COMMIT", "ABORT"):
+                        if log.transaction_id in self.undo_list:
+                            self.undo_list.remove(log.transaction_id)
+                    elif log.type == "START":
+                        if log.transaction_id not in self.undo_list:
+                            self.undo_list.append(log.transaction_id)
+                    elif log.previous_data and log.new_data:  
+                        # Apply redo by simulating the write of V2 to Xj
+                        redo_query = log.query
+                        # pass to processor
+
+                # UNDO Phase
+                print("Starting UNDO phase...")
+                for log in reversed(logs):
+                    if not self.undo_list:
+                        break
+
                     if log.transaction_id in self.undo_list:
-                        self.undo_list.remove(log.transaction_id)
-                elif log.type == "START":
-                    if log.transaction_id not in self.undo_list:
-                        self.undo_list.append(log.transaction_id)
-                elif log.previous_data and log.new_data:  
-                    # Apply redo by simulating the write of V2 to Xj
-                    redo_query = log.query
-                    # pass to processor
+                        if log.previous_data and log.new_data:
+                            undo_log = ExecutionResult(
+                                transaction_id=log.transaction_id,
+                                timestamp=datetime.datetime.now(),
+                                status="",
+                                query=None,
+                                before=log.previous_data,
+                                after=None,
+                                type="ROLLBACK"
+                            )
+                            self.write_log(undo_log)
 
-            # UNDO Phase
-            print("Starting UNDO phase...")
-            for log in reversed(logs):
-                if not self.undo_list:
-                    break
+                            query_words = log.query.split()
+                            query_type = query_words[0].upper()
+                            table_name = self.get_table_name(log.query)
 
-                if log.transaction_id in self.undo_list:
-                    if log.previous_data and log.new_data:
-                        undo_log = ExecutionResult(
-                            transaction_id=log.transaction_id,
-                            timestamp=datetime.datetime.now(),
-                            status="",
-                            query=None,
-                            before=log.previous_data,
-                            after=None,
-                            type="ROLLBACK"
-                        )
-                        self.write_log(undo_log)
+                            print("------------------> " + log.query)
+                            if query_type == "UPDATE":
+                                undo_query = self.build_update_query(table_name, log.previous_data, log.new_data)
+                            elif query_type == "INSERT":
+                                undo_query = self.build_delete_query(table_name, log.new_data)
+                            elif query_type == "DELETE":
+                                undo_query = self.build_insert_query(table_name, log.previous_data)
+                            else:
+                                print("Pass")
+                                continue
 
-                        query_words = log.query.split()
-                        query_type = query_words[0].upper()
-                        table_name = self.get_table_name(log.query)
+                            ## pass to processor
 
-                        print("------------------> " + log.query)
-                        if query_type == "UPDATE":
-                            undo_query = self.build_update_query(table_name, log.previous_data, log.new_data)
-                        elif query_type == "INSERT":
-                            undo_query = self.build_delete_query(table_name, log.new_data)
-                        elif query_type == "DELETE":
-                            undo_query = self.build_insert_query(table_name, log.previous_data)
-                        else:
-                            print("Pass")
-                            continue
-
-                        ## pass to processor
-
-                    elif log.status == "START":
-                        # Write an ABORT log and remove transaction from undo list
-                        abort_log = ExecutionResult(
-                            transaction_id=log.transaction_id,
-                            timestamp=datetime.datetime.now(),
-                            status="",
-                            query=None,
-                            before=None,
-                            after=None,
-                            type="ABORT"
-                        )
-                        self.write_log(abort_log)
-                        self.undo_list.remove(log.transaction_id)
+                        elif log.status == "START":
+                            # Write an ABORT log and remove transaction from undo list
+                            abort_log = ExecutionResult(
+                                transaction_id=log.transaction_id,
+                                timestamp=datetime.datetime.now(),
+                                status="",
+                                query=None,
+                                before=None,
+                                after=None,
+                                type="ABORT"
+                            )
+                            self.write_log(abort_log)
+                            self.undo_list.remove(log.transaction_id)
+        except Exception as e:
+            print(f"Error during system recovery: {e}")
 
 if __name__ == "__main__":
 
