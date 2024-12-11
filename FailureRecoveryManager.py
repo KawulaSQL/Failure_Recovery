@@ -38,15 +38,15 @@ class FailureRecoveryManager:
     _shutdown_event = threading.Event()
     _checkpoint_thread = None
 
-    def __init__(self, base_path: str, log_file='wal.log', log_size=50):
+    def __init__(self, log_file='wal.log', log_size=50):
         self.memory_wal: List[ExecutionResult] = []
         self.undo_list = []
         self.log_file = log_file
-        self.buffer = Buffer
+        self.buffer = Buffer(100)
         self.wal_size = log_size
         self.last_checkpoint_time = datetime.datetime.now()
         self.checkpoint_interval = datetime.timedelta(minutes=5)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
         if not os.path.exists(self.log_file):
             with open(self.log_file, 'w') as f:
