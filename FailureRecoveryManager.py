@@ -7,7 +7,7 @@ import re
 import threading
 from typing import Generic, Optional, TypeVar, List, Dict, Union
 from dataclasses import dataclass
-from Storage_Manager.StorageManager import StorageManager
+from Buffer import Buffer
 import time 
 T = TypeVar('T')
 
@@ -42,7 +42,7 @@ class FailureRecoveryManager:
         self.memory_wal: List[ExecutionResult] = []
         self.undo_list = []
         self.log_file = log_file
-        self.buffer = []
+        self.buffer = Buffer
         self.wal_size = log_size
         self.last_checkpoint_time = datetime.datetime.now()
         self.checkpoint_interval = datetime.timedelta(minutes=5)
@@ -62,11 +62,9 @@ class FailureRecoveryManager:
         """Start the checkpointing thread if it hasn't been started already."""
         with cls._checkpoint_lock:  # Ensure thread-safe initialization
             if not cls._checkpoint_thread_started:
-                print("Starting checkpointing thread...")
                 threading.Thread(target=cls._checkpoint_loop, daemon=True).start()
                 cls._checkpoint_thread_started = True
-            else:
-                print("Checkpointing thread already running.")
+                
 
     @classmethod
     def _checkpoint_loop(cls):
@@ -74,7 +72,6 @@ class FailureRecoveryManager:
         while True:
             try:
                 time.sleep(300)  # Corrected to use time.sleep
-                print("Running checkpoint...")
                 # Iterate over instances and save checkpoint
                 with cls._checkpoint_lock:
                     for instance in cls._instances:
@@ -82,7 +79,6 @@ class FailureRecoveryManager:
                             instance.save_checkpoint()
                         except Exception as e:
                             print(f"Error during checkpointing for instance {instance}: {e}")
-                print("Checkpoint saved.")
             except Exception as e:
                 print(f"Error in checkpoint loop: {e}")
     
@@ -286,16 +282,13 @@ class FailureRecoveryManager:
         """
         try:
             if not criteria.transaction_id:
-                print("No transaction IDs provided in criteria.")
                 return []
             with self.lock:
                 valid_transaction_ids = [tid for tid in criteria.transaction_id if tid in self.undo_list]
 
                 if not valid_transaction_ids:
-                    print("No valid transactions to undo. Exiting recovery process.")
                     return []
 
-                print(f"Transactions to undo: {valid_transaction_ids}")
                 undo_list = valid_transaction_ids
                 undo_queries = []  # List of undo queries to return
                 # Scan memory_wal
@@ -304,16 +297,13 @@ class FailureRecoveryManager:
                 for exec_result in reversed(self.memory_wal):
                     if (len(undo_list)==0):
                         done_undo = True
-                        print("Undo list is now empty, stop recovery")
                         break   
                     checkcurr_transaction_id = exec_result.transaction_id
                     if (checkcurr_transaction_id in undo_list):
                         if exec_result.type == "START":
-                            print("Found the start for the transaction_id: "+ str(checkcurr_transaction_id))
                             undo_list.remove(checkcurr_transaction_id)
                             undo_query= []
                         elif exec_result.type == "UPDATE":
-                            print(exec_result.previous_data)
                             table_name = self.get_table_name(exec_result.query)
                             undo_query = self.build_update_query(table_name, exec_result.previous_data, exec_result.new_data)
                         elif exec_result.type == "INSERT":
@@ -323,10 +313,8 @@ class FailureRecoveryManager:
                             table_name = self.get_table_name(exec_result.query)
                             undo_query = self.build_insert_query(table_name, exec_result.previous_data, exec_result.new_data)
                         else:
-                            print("Not a valid query")
                             continue
-                        for i in undo_query:
-                            print(f"Executing undo query: {i}\n")  
+                        for i in undo_query: 
                             undo_queries.append(i)  
 
                 # If we still cannot find START for every transaction_id in memory_wal
@@ -335,21 +323,17 @@ class FailureRecoveryManager:
                     done_undo = True
 
                 if (done_undo==False):
-                    print("Akan melakukan pembacaan dari wal.log")
                     if not os.path.exists(self.log_file):
                         raise Exception("No log file. Abort")
                     logs = self.parse_log_file("./wal.log")
                     for log_entry in reversed(logs):
                         checkcurr_transaction_id = log_entry.transaction_id
-                        print("\nNow Running: "+ log_entry.type + " " + str(log_entry.transaction_id))
                         if (len(undo_list)==0):
                             done_undo = True
-                            print("Undo list is now empty, stop recovery")
                             break
                         if(log_entry.query!=None):
                             if (checkcurr_transaction_id in undo_list):
                                 table_name = self.get_table_name(log_entry.query)
-                                print("------------------> " + log_entry.query)
                                 query_type = log_entry.query.split()[0]
                                 if query_type == "UPDATE":
                                     undo_query = self.build_update_query(table_name, log_entry.previous_data, log_entry.new_data)
@@ -358,10 +342,8 @@ class FailureRecoveryManager:
                                 elif query_type == "DELETE":
                                     undo_query = self.build_insert_query(table_name, log_entry.previous_data, log_entry.new_data)
                                 else:
-                                    print("Not a valid query got:",log_entry.query)
                                     continue
                                 for i in undo_query:
-                                    print(f"Executing undo query: {i}\n") 
                                     # undo_log = ExecutionResult(
                                     #     transaction_id=checkcurr_transaction_id,
                                     #     timestamp=datetime.datetime.now(),
@@ -374,7 +356,6 @@ class FailureRecoveryManager:
                                     undo_queries.append(i) 
                         else:
                             if log_entry.type == "START" and checkcurr_transaction_id in undo_list:
-                                print("Found the start for the transaction_id: "+ str(checkcurr_transaction_id))
                                 undo_list.remove(checkcurr_transaction_id)
 
                 return undo_queries
@@ -398,11 +379,9 @@ class FailureRecoveryManager:
             with self.lock:
                 logs = self.parse_log_file("./wal.log")
                 if not logs:
-                    print("No logs found for recovery.")
                     return
 
                 # REDO Phase
-                print("Starting REDO phase...")
                 last_checkpoint = None
                 for log in reversed(logs):
                     if log.type == "CHECKPOINT":
@@ -410,6 +389,7 @@ class FailureRecoveryManager:
 
                 redo_start_index = logs.index(last_checkpoint) + 1 if last_checkpoint else 0
 
+                redo_query = []
                 # Perform REDO
                 for log in logs[redo_start_index:]:
                     if log.type in ("COMMIT", "ABORT"):
@@ -418,13 +398,12 @@ class FailureRecoveryManager:
                     elif log.type == "START":
                         if log.transaction_id not in self.undo_list:
                             self.undo_list.append(log.transaction_id)
-                    elif log.previous_data and log.new_data:  
-                        # Apply redo by simulating the write of V2 to Xj
-                        redo_query = log.query
-                        # pass to processor
+                    elif log.type == "INSERT" or log.type == "UPDATE" or log.type == "DELETE":  
+                        redo_query.append(log.query)
 
                 # UNDO Phase
-                print("Starting UNDO phase...")
+
+                undo_query = []
                 for log in reversed(logs):
                     if not self.undo_list:
                         break
@@ -443,18 +422,17 @@ class FailureRecoveryManager:
                             self.write_log(undo_log)
 
                             query_words = log.query.split()
-                            query_type = query_words[0].upper()
+                            query_type = log.type
                             table_name = self.get_table_name(log.query)
 
                             print("------------------> " + log.query)
                             if query_type == "UPDATE":
-                                undo_query = self.build_update_query(table_name, log.previous_data, log.new_data)
+                                undo_query.extend(self.build_update_query(table_name, log.previous_data, log.new_data))
                             elif query_type == "INSERT":
-                                undo_query = self.build_delete_query(table_name, log.new_data)
+                                undo_query.extend(self.build_delete_query(table_name, log.new_data))
                             elif query_type == "DELETE":
-                                undo_query = self.build_insert_query(table_name, log.previous_data)
+                                undo_query.extend(self.build_insert_query(table_name, log.previous_data))
                             else:
-                                print("Pass")
                                 continue
 
                             ## pass to processor
