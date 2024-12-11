@@ -149,13 +149,10 @@ class FailureRecoveryManager:
             return []
 
     def get_buffer(self):
-        return self.buffer()
+        return self.buffer
 
     def set_buffer(self, buffer):
         self.buffer = buffer
-        
-    def clear_buffer(self):
-        self.buffer.clear()
 
 
     def write_log(self, info: ExecutionResult) -> None:
@@ -215,10 +212,10 @@ class FailureRecoveryManager:
                         log_file.write(checkpoint_entry + '\n')
                 except Exception as e:
                     print(f"Error writing CHECKPOINT log: {e}")
-                # try:
-                #     self.storage_manager.write_buffer(self.buffer)
-                # except Exception as e:
-                #     print(f"Error writing buffer to storage manager: {e}")
+                try:
+                    self.buffer.flush()
+                except Exception as e:
+                    print(f"Error writing buffer to storage manager: {e}")
 
                 self.memory_wal.clear()
         except Exception as e:

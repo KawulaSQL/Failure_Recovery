@@ -99,8 +99,24 @@ class Buffer:
 
     def flush(self):
         """
-        Clear all data from the buffer.
+        Write all the blocks in the buffer to disk.
+
+        Each block is written to a file based on its table name and offset.
+        File path: ../Storage_Manager/storage/{table_name}_table.bin
         """
+        current_node = self.dll.head.next 
+
+        while current_node != self.dll.tail: 
+            key = current_node.key  
+            table_name, offset = key
+            block = current_node.value 
+
+            file_path = f"../Storage_Manager/storage/{table_name}_table.bin"
+
+            block.write_block(file_path, offset)
+
+            current_node = current_node.next
+
         self.cache.clear()
         # Reset the doubly linked list
         self.dll = DoublyLinkedList()
