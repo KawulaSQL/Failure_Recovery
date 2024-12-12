@@ -311,8 +311,8 @@ class FailureRecoveryManager:
                             undo_query = self.build_insert_query(table_name, exec_result.previous_data, exec_result.new_data)
                         else:
                             continue
-                        for i in undo_query: 
-                            undo_queries.append(i)  
+                        for query in undo_query: 
+                            undo_queries.append([checkcurr_transaction_id, query]) 
 
                 # If we still cannot find START for every transaction_id in memory_wal
                 # READ .LOG FILE
@@ -340,17 +340,8 @@ class FailureRecoveryManager:
                                     undo_query = self.build_insert_query(table_name, log_entry.previous_data, log_entry.new_data)
                                 else:
                                     continue
-                                for i in undo_query:
-                                    # undo_log = ExecutionResult(
-                                    #     transaction_id=checkcurr_transaction_id,
-                                    #     timestamp=datetime.datetime.now(),
-                                    #     type="ROLLBACK",
-                                    #     before=log_entry.new_data,
-                                    #     after=log_entry.previous_data,
-                                    #     query=i,
-                                    # )
-                                    # self.write_log(undo_log)
-                                    undo_queries.append(i) 
+                                for query in undo_query:
+                                    undo_queries.append([checkcurr_transaction_id, query])
                         else:
                             if log_entry.type == "START" and checkcurr_transaction_id in undo_list:
                                 undo_list.remove(checkcurr_transaction_id)

@@ -40,7 +40,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
         FailureRecoveryManager._instances = []
         FailureRecoveryManager._shutdown_event.clear()
         self.mock_file = "mock_wal.log"
-        self.manager = FailureRecoveryManager(base_path="./Storage_Manager/storage")
+        self.manager = FailureRecoveryManager()
 
 
     @patch("builtins.open", new_callable=mock_open)
@@ -334,8 +334,8 @@ class TestFailureRecoveryManager(unittest.TestCase):
         """Test that only one checkpoint thread starts across multiple instances."""
         # Arrange
         FailureRecoveryManager.shutdown()
-        manager_1 = FailureRecoveryManager(base_path="./Storage_Manager/storage")
-        manager_2 = FailureRecoveryManager(base_path="./Storage_Manager/storage")
+        manager_1 = FailureRecoveryManager()
+        manager_2 = FailureRecoveryManager()
 
         # Act
         # The second instance should not start a new thread because one is already running
@@ -474,7 +474,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = [
-            "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"
+           [1, "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
 
@@ -514,7 +514,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = [
-            "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"
+            [1,"UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
         mock_parse_log_file.assert_called_once_with("./wal.log")
@@ -573,8 +573,8 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = [
-            "DELETE FROM table_name WHERE id='2' AND name='new_entry';",
-            "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';",
+            [2,"DELETE FROM table_name WHERE id='2' AND name='new_entry';"],
+            [1,"UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"],
             
         ]
         self.assertEqual(undo_queries, expected_queries)
@@ -616,7 +616,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = [
-            "INSERT INTO table_name (id, name) VALUES (3, 'deleted_entry');"
+            [3,"INSERT INTO table_name (id, name) VALUES (3, 'deleted_entry');"]
         ]
         self.assertEqual(undo_queries, expected_queries)
         mock_parse_log_file.assert_called_once_with("./wal.log")
@@ -643,7 +643,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Mock log file parsing to include transaction 2 as aborted
         exec_result_2 = ExecutionResult(
-            transaction_id=2,
+            transaction_id=1,
             timestamp=datetime(2024, 11, 22, 10, 15, 0),
             type="START",
             status="",
@@ -657,7 +657,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
         undo_queries = self.manager.recover(criteria)
         # Assert
         expected_queries = [
-            "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"
+            [1, "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
         mock_parse_log_file.assert_called_once_with("./wal.log")
@@ -707,8 +707,8 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
             # Assert
             expected_queries = [
-                "UPDATE table_name SET id='1', name='old_value1' WHERE id='1' AND name='new_value1';",
-                "DELETE FROM table_name WHERE id='2' AND name='value2';"
+                [1,"UPDATE table_name SET id='1', name='old_value1' WHERE id='1' AND name='new_value1';"],
+                [2,"DELETE FROM table_name WHERE id='2' AND name='value2';"]
             ]
             self.assertEqual(undo_queries, expected_queries)
 
