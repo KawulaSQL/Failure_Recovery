@@ -1,4 +1,11 @@
 # Failure Recovery Process and Unit Test Guide
+**Failure Recovery**
+|NIM	|Name|
+| ------------- | ------------- |
+13522055	|Benardo
+13522012	|Thea Josephine Halim
+13522100	|M. Hanief Fatkhan Nashrullah
+13521026	|Kartini Copa
 
 ## 1. Failure Recovery Process
 
