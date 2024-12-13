@@ -75,6 +75,7 @@ if __name__ == "__main__":
 
     print(undo_queries)
 
-
+    execution_result , undo = frm.parse_log_file(frm.log_file)
+    print(execution_result)
     while True:
         time.sleep(1)  # Sleep for 1 second to avoid busy-waiting

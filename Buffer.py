@@ -112,8 +112,8 @@ class Buffer:
             block = current_node.value 
 
             file_path = f"../Storage_Manager/storage/{table_name}_table.bin"
-
-            block.write_block(file_path, offset)
+            if (block.header["free_space_offset"]  != 0):
+                block.write_block(file_path, offset)
 
             current_node = current_node.next
 
