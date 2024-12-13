@@ -94,6 +94,7 @@ class FailureRecoveryManager:
          
     def parse_log_file(self, file_path: str) -> List[ExecutionResult]:
         execution_results = []
+        last_undo_list = []
         try:
             with self.lock:  # Protecting any modifications
                 with open(file_path, 'r') as file:
@@ -103,8 +104,8 @@ class FailureRecoveryManager:
                             if match:
                                 timestamp = datetime.datetime.fromisoformat(match.group(1))
                                 try:
-                                    undo_list = eval(match.group(2))  
-                                    self.undo_list.extend(undo_list)  
+                                    undo_list = eval(match.group(2)) 
+                                    last_undo_list = undo_list  
                                     execution_result = ExecutionResult(
                                         transaction_id=None, 
                                         timestamp=timestamp,
@@ -143,10 +144,10 @@ class FailureRecoveryManager:
                                     execution_results.append(execution_result)
                                 except Exception as e:
                                     print(f"Error parsing log entry: {e}")
-                return execution_results
+                return execution_results, last_undo_list
         except Exception as e:
             print(f"Error reading log file {file_path}: {e}")
-            return []
+            return [], []
 
     def get_buffer(self):
         return self.buffer
@@ -322,7 +323,7 @@ class FailureRecoveryManager:
                 if (done_undo==False):
                     if not os.path.exists(self.log_file):
                         raise Exception("No log file. Abort")
-                    logs = self.parse_log_file("./wal.log")
+                    logs, last_undo_list = self.parse_log_file("./wal.log")
                     for log_entry in reversed(logs):
                         checkcurr_transaction_id = log_entry.transaction_id
                         if (len(undo_list)==0):
@@ -365,10 +366,11 @@ class FailureRecoveryManager:
         # Parse the log file to retrieve all logs
         try:
             with self.lock:
-                logs = self.parse_log_file("./wal.log")
+                logs, undo_list = self.parse_log_file("./wal.log")
                 if not logs:
                     return
 
+                self.undo_list = undo_list
                 # REDO Phase
                 last_checkpoint = None
                 for log in reversed(logs):
@@ -387,7 +389,7 @@ class FailureRecoveryManager:
                         if log.transaction_id not in self.undo_list:
                             self.undo_list.append(log.transaction_id)
                     elif log.type == "INSERT" or log.type == "UPDATE" or log.type == "DELETE":  
-                        redo_query.append(log.query)
+                        redo_query.append([log.transaction_id, log.query])
 
                 # UNDO Phase
 
@@ -398,28 +400,17 @@ class FailureRecoveryManager:
 
                     if log.transaction_id in self.undo_list:
                         if log.previous_data and log.new_data:
-                            undo_log = ExecutionResult(
-                                transaction_id=log.transaction_id,
-                                timestamp=datetime.datetime.now(),
-                                status="",
-                                query=None,
-                                before=log.previous_data,
-                                after=None,
-                                type="ROLLBACK"
-                            )
-                            self.write_log(undo_log)
 
                             query_words = log.query.split()
                             query_type = log.type
                             table_name = self.get_table_name(log.query)
 
-                            print("------------------> " + log.query)
                             if query_type == "UPDATE":
-                                undo_query.extend(self.build_update_query(table_name, log.previous_data, log.new_data))
+                                undo_query.extend([log.transaction_id, self.build_update_query(table_name, log.previous_data, log.new_data)])
                             elif query_type == "INSERT":
-                                undo_query.extend(self.build_delete_query(table_name, log.new_data))
+                                undo_query.extend([log.transaction_id, self.build_delete_query(table_name, log.new_data)])
                             elif query_type == "DELETE":
-                                undo_query.extend(self.build_insert_query(table_name, log.previous_data))
+                                undo_query.extend([log.transaction_id, self.build_insert_query(table_name, log.previous_data)])
                             else:
                                 continue
 
@@ -427,23 +418,15 @@ class FailureRecoveryManager:
 
                         elif log.status == "START":
                             # Write an ABORT log and remove transaction from undo list
-                            abort_log = ExecutionResult(
-                                transaction_id=log.transaction_id,
-                                timestamp=datetime.datetime.now(),
-                                status="",
-                                query=None,
-                                before=None,
-                                after=None,
-                                type="ABORT"
-                            )
-                            self.write_log(abort_log)
                             self.undo_list.remove(log.transaction_id)
+            return redo_query, undo_query
         except Exception as e:
             print(f"Error during system recovery: {e}")
+            return redo_query, undo_query
 
 if __name__ == "__main__":
 
-    failurerec = FailureRecoveryManager("../Storage_Manager/storage")
+    failurerec = FailureRecoveryManager()
 
     print("\nExecution Result:")
     res = failurerec.parse_log_file("./wal.log")

@@ -290,7 +290,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
         )
         with patch("builtins.open", mock_open(read_data=log_content)):
             # Act
-            results = self.manager.parse_log_file(self.mock_file)
+            results, undo_list = self.manager.parse_log_file(self.mock_file)
 
             # Assert
             self.assertEqual(len(results), 2)
@@ -467,7 +467,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
         self.manager.memory_wal.extend([exec_result_start, exec_result_1])
 
         # Mock log file parsing to include no relevant entries
-        mock_parse_log_file.return_value = []
+        mock_parse_log_file.return_value = ([], [])
 
         # Act
         undo_queries = self.manager.recover(criteria)
@@ -507,7 +507,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             previous_data=None,
             new_data=None
         )
-        mock_parse_log_file.return_value = [exec_result_start]
+        mock_parse_log_file.return_value = ([exec_result_start], [1])
 
         # Act
         undo_queries = self.manager.recover(criteria)
@@ -566,7 +566,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             previous_data=None,
             new_data=None
         )
-        mock_parse_log_file.return_value = [exec_result_start_1, exec_result_start_2]
+        mock_parse_log_file.return_value = ([exec_result_start_1, exec_result_start_2],[])
 
         # Act
         undo_queries = self.manager.recover(criteria)
@@ -609,7 +609,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             previous_data=None,
             new_data=None
         )
-        mock_parse_log_file.return_value = [exec_result_start]
+        mock_parse_log_file.return_value = ([exec_result_start],[])
 
         # Act
         undo_queries = self.manager.recover(criteria)
@@ -651,7 +651,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             previous_data=Rows([], 0),
             new_data=Rows([], 0)
         )
-        mock_parse_log_file.return_value = [exec_result_2]
+        mock_parse_log_file.return_value = ([exec_result_2],[])
 
         # Act
         undo_queries = self.manager.recover(criteria)
@@ -701,7 +701,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             previous_data=Rows([], 0),
             new_data=Rows([], 0)
         )
-        with patch.object(self.manager, 'parse_log_file', return_value=[exec_result_2, exec_result_3]):
+        with patch.object(self.manager, 'parse_log_file', return_value=([exec_result_2, exec_result_3],[])):
             # Act
             undo_queries = self.manager.recover(criteria)
 
@@ -768,7 +768,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = []
-        self.assertEqual(undo_queries, [])
+        self.assertEqual(undo_queries, expected_queries)
         mock_parse_log_file.assert_not_called()
 
 if __name__ == "__main__":
