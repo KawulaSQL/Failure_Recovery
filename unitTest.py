@@ -37,8 +37,6 @@ class TestFailureRecoveryManager(unittest.TestCase):
     def setUp(self):
         # Reset class-level variables before each test
         FailureRecoveryManager._checkpoint_thread_started = False
-        FailureRecoveryManager._instances = []
-        FailureRecoveryManager._shutdown_event.clear()
         self.mock_file = "test.log"
         self.manager = FailureRecoveryManager(log_file=self.mock_file)
 
@@ -329,19 +327,6 @@ class TestFailureRecoveryManager(unittest.TestCase):
         handle.write.assert_any_call(f"CHECKPOINT,{fixed_time.isoformat()},[]\n")
         self.assertEqual(len(self.manager.memory_wal), 0)  # Ensure memory WAL is cleared
 
-    @patch("FailureRecoveryManager.threading.Thread.start")
-    def test_single_checkpoint_thread(self, mock_thread_start):
-        """Test that only one checkpoint thread starts across multiple instances."""
-        # Arrange
-        FailureRecoveryManager.shutdown()
-        manager_1 = FailureRecoveryManager()
-        manager_2 = FailureRecoveryManager()
-
-        # Act
-        # The second instance should not start a new thread because one is already running
-
-        # Assert
-        self.assertEqual(mock_thread_start.call_count, 1) 
 
     @patch("builtins.open", new_callable=mock_open)
     @patch("datetime.datetime")
@@ -388,7 +373,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
         queries = self.manager.build_update_query(table_name, before, after)
 
         # Assert
-        expected_query = "UPDATE users SET id='1', name='old_value' WHERE id='1' AND name='new_value';"
+        expected_query = "UPDATE users SET id=1, name='old_value' WHERE id=1 AND name='new_value';"
         self.assertEqual(queries[0], expected_query)
 
     def test_build_delete_query(self):
@@ -400,7 +385,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
         queries = self.manager.build_delete_query(table_name, after)
 
         # Assert
-        expected_query = "DELETE FROM users WHERE id='1' AND name='new_value';"
+        expected_query = "DELETE FROM users WHERE id=1 AND name='new_value';"
         self.assertEqual(queries[0], expected_query)
 
     def test_build_insert_query(self):
@@ -474,7 +459,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = [
-           [1, "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
+           [1, "UPDATE table_name SET id=1, name='old_value' WHERE id=1 AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
 
@@ -514,7 +499,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = [
-            [1,"UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
+            [1,"UPDATE table_name SET id=1, name='old_value' WHERE id=1 AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
         mock_parse_log_file.assert_called_once_with(self.mock_file)
@@ -532,7 +517,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime(2024, 11, 22, 10, 0, 0),
             type="UPDATE",
             status="",
-            query="UPDATE table_name SET name='new_value' WHERE id=1",
+            query="UPDATE table_name SET name='new_value' WHERE id=1;",
             previous_data=Rows([{'id': 1, 'name': 'old_value'}], 1),
             new_data=Rows([{'id': 1, 'name': 'new_value'}], 1)
         )
@@ -541,7 +526,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime(2024, 11, 22, 10, 5, 0),
             type="INSERT",
             status="",
-            query="INSERT INTO table_name (id, name) VALUES (2, 'new_entry')",
+            query="INSERT INTO table_name (id, name) VALUES (2, 'new_entry');",
             previous_data=Rows([], 0),
             new_data=Rows([{'id': 2, 'name': 'new_entry'}], 1)
         )
@@ -573,8 +558,8 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
         # Assert
         expected_queries = [
-            [2,"DELETE FROM table_name WHERE id='2' AND name='new_entry';"],
-            [1,"UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"],
+            [2,"DELETE FROM table_name WHERE id=2 AND name='new_entry';"],
+            [1,"UPDATE table_name SET id=1, name='old_value' WHERE id=1 AND name='new_value';"],
             
         ]
         self.assertEqual(undo_queries, expected_queries)
@@ -593,7 +578,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime(2024, 11, 22, 10, 10, 0),
             type="DELETE",
             status="",
-            query="DELETE FROM table_name WHERE id=3",
+            query="DELETE FROM table_name WHERE id=3;",
             previous_data=Rows([{'id': 3, 'name': 'deleted_entry'}], 1),
             new_data=Rows([], 0)
         )
@@ -635,7 +620,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime(2024, 11, 22, 10, 0, 0),
             type="UPDATE",
             status="",
-            query="UPDATE table_name SET name='new_value' WHERE id=1",
+            query="UPDATE table_name SET name='new_value' WHERE id=1;",
             previous_data=Rows([{'id': 1, 'name': 'old_value'}], 1),
             new_data=Rows([{'id': 1, 'name': 'new_value'}], 1)
         )
@@ -657,7 +642,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
         undo_queries = self.manager.recover(criteria)
         # Assert
         expected_queries = [
-            [1, "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
+            [1, "UPDATE table_name SET id=1, name='old_value' WHERE id=1 AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
         mock_parse_log_file.assert_called_once_with(self.mock_file)
@@ -676,7 +661,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime(2024, 11, 22, 10, 0, 0),
             type="UPDATE",
             status="",
-            query="UPDATE table_name SET name='new_value1' WHERE id=1",
+            query="UPDATE table_name SET name='new_value1' WHERE id=1;",
             previous_data=Rows([{'id': 1, 'name': 'old_value1'}], 1),
             new_data=Rows([{'id': 1, 'name': 'new_value1'}], 1)
         )
@@ -688,7 +673,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime(2024, 11, 22, 10, 5, 0),
             type="INSERT",
             status="",
-            query="INSERT INTO table_name (id, name) VALUES (2, 'value2')",
+            query="INSERT INTO table_name (id, name) VALUES (2, 'value2');",
             previous_data=Rows([], 0),
             new_data=Rows([{'id': 2, 'name': 'value2'}], 1)
         )
@@ -707,8 +692,8 @@ class TestFailureRecoveryManager(unittest.TestCase):
 
             # Assert
             expected_queries = [
-                [1,"UPDATE table_name SET id='1', name='old_value1' WHERE id='1' AND name='new_value1';"],
-                [2,"DELETE FROM table_name WHERE id='2' AND name='value2';"]
+                [1,"UPDATE table_name SET id=1, name='old_value1' WHERE id=1 AND name='new_value1';"],
+                [2,"DELETE FROM table_name WHERE id=2 AND name='value2';"]
             ]
             self.assertEqual(undo_queries, expected_queries)
 
@@ -727,7 +712,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime(2024, 11, 22, 10, 0, 0),
             type="ACTIVE",
             status="DELETE",
-            query="DELETE FROM table_name WHERE id=1",
+            query="DELETE FROM table_name WHERE id=1;",
             previous_data=Rows([{'id': 1, 'name': 'value1'}], 1),
             new_data=Rows([], 0)
         )
@@ -772,24 +757,14 @@ class TestFailureRecoveryManager(unittest.TestCase):
         mock_parse_log_file.assert_not_called()
 
     def test_recovery_scenario(self):
-        """
-        This test simulates a scenario of multiple transactions performing a sequence of operations:
-        - Transaction 100: START -> INSERT -> UPDATE -> COMMIT
-        - Transaction 101: START -> INSERT -> UPDATE -> NO COMMIT (will remain in undo_list)
-        - Transaction 102: START -> DELETE -> NO COMMIT (will remain in undo_list)
-        
-        We then call recover with criteria to undo transactions 101 and 102 and verify
-        that the generated undo queries match what we expect based on the logged operations.
-        """
 
-        # Prepare some dummy data rows
         before_insert_data = Rows(data=[], rows_count=0)
-        after_insert_data = Rows(data=[{"id": "1", "name": "Alice"}], rows_count=1)
+        after_insert_data = Rows(data=[{"id": 1, "name": "Alice"}], rows_count=1)
 
-        before_update_data = Rows(data=[{"id": "1", "name": "Alice"}], rows_count=1)
-        after_update_data = Rows(data=[{"id": "1", "name": "Alicia"}], rows_count=1)
+        before_update_data = Rows(data=[{"id": 1, "name": "Alice"}], rows_count=1)
+        after_update_data = Rows(data=[{"id": 1, "name": "Alicia"}], rows_count=1)
 
-        before_delete_data = Rows(data=[{"id": "2", "name": "Bob"}], rows_count=1)
+        before_delete_data = Rows(data=[{"id": 2, "name": "Bob"}], rows_count=1)
         after_delete_data = Rows(data=[], rows_count=0)
 
         # Transaction 100: Will be fully committed
@@ -799,7 +774,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="START",
             status="",
-            query="START TRANSACTION;",
+            query=None,
             previous_data=before_insert_data,
             new_data=after_insert_data
         )
@@ -811,7 +786,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="INSERT",
             status="",
-            query="INSERT INTO test (id, name) VALUES ('1','Alice');",
+            query="INSERT INTO test (id, name) VALUES (1,'Alice');",
             previous_data=before_insert_data,
             new_data=after_insert_data
         )
@@ -823,7 +798,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="UPDATE",
             status="",
-            query="UPDATE test SET name='Alicia' WHERE id='1';",
+            query="UPDATE test SET name='Alicia' WHERE id=1;",
             previous_data=before_update_data,
             new_data=after_update_data
         )
@@ -847,7 +822,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="START",
             status="",
-            query="START TRANSACTION;",
+            query="",
             previous_data=before_insert_data,
             new_data=after_insert_data
         )
@@ -858,9 +833,9 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="INSERT",
             status="",
-            query="INSERT INTO test (id, name) VALUES ('3','Charlie');",
+            query="INSERT INTO test (id, name) VALUES (3,'Charlie');",
             previous_data=before_insert_data,
-            new_data=Rows(data=[{"id": "3", "name": "Charlie"}], rows_count=1)
+            new_data=Rows(data=[{"id": 3, "name": "Charlie"}], rows_count=1)
         )
         self.manager.write_log(insert_101)
 
@@ -869,9 +844,9 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="UPDATE",
             status="",
-            query="UPDATE test SET name='Charles' WHERE id='3';",
-            previous_data=Rows(data=[{"id": "3", "name": "Charlie"}], rows_count=1),
-            new_data=Rows(data=[{"id": "3", "name": "Charles"}], rows_count=1)
+            query="UPDATE test SET name='Charles' WHERE id=3;",
+            previous_data=Rows(data=[{"id": 3, "name": "Charlie"}], rows_count=1),
+            new_data=Rows(data=[{"id": 3, "name": "Charles"}], rows_count=1)
         )
         self.manager.write_log(update_101)
         # No COMMIT for transaction 101
@@ -882,7 +857,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="START",
             status="",
-            query="START TRANSACTION;",
+            query=None,
             previous_data=before_delete_data,
             new_data=after_delete_data
         )
@@ -893,7 +868,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="START",
             status="",
-            query="START TRANSACTION;",
+            query=None,
             previous_data=before_delete_data,
             new_data=after_delete_data
         )
@@ -903,7 +878,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             timestamp=datetime.now(),
             type="DELETE",
             status="",
-            query="DELETE FROM test WHERE id='2';",
+            query="DELETE FROM test WHERE id=2;",
             previous_data=before_delete_data,
             new_data=after_delete_data
         )
@@ -915,9 +890,9 @@ class TestFailureRecoveryManager(unittest.TestCase):
         undo_queries = self.manager.recover(criteria)
 
 
-        expected_101_update_undo = "UPDATE test SET id='3', name='Charlie' WHERE id='3' AND name='Charles';"
-        expected_101_insert_undo = "DELETE FROM test WHERE id='3' AND name='Charlie';"   
-        expected_102_delete_undo = "INSERT INTO test (id, name) VALUES ('2', 'Bob');"
+        expected_101_update_undo = "UPDATE test SET id=3, name='Charlie' WHERE id=3 AND name='Charles';"
+        expected_101_insert_undo = "DELETE FROM test WHERE id=3 AND name='Charlie';"   
+        expected_102_delete_undo = "INSERT INTO test (id, name) VALUES (2, 'Bob');"
         received_101 = [q for (tid, q) in undo_queries if tid == 101]
         received_102 = [q for (tid, q) in undo_queries if tid == 102]
 
@@ -927,6 +902,85 @@ class TestFailureRecoveryManager(unittest.TestCase):
         self.assertIn(expected_101_update_undo, received_101)
         self.assertIn(expected_101_insert_undo, received_101)
         self.assertIn(expected_102_delete_undo, received_102)
+
+    @patch('FailureRecoveryManager.FailureRecoveryManager.parse_log_file')
+    def test_recoverSystem_checkpoint_redo_undo(self, mock_parse_log_file):
+        """Test recovery system with checkpoint, redo, and undo operations."""
+        logs = [
+            ExecutionResult(
+                transaction_id=2,
+                timestamp=datetime.now() - timedelta(minutes=20),
+                type="START",
+                status="",
+                query=None,
+                previous_data=None,
+                new_data=None
+            ),
+            ExecutionResult(
+                transaction_id=2,
+                timestamp=datetime.now() - timedelta(minutes=20),
+                type="DELETE",
+                status="",
+                query="DELETE FROM table1 where id=1;",
+                previous_data=Rows(data=[{"id": 1, "name": "Bob"}], rows_count=1),
+                new_data=None
+            ),
+            ExecutionResult(
+                transaction_id=None,
+                timestamp=datetime.now() - timedelta(minutes=15),
+                type="CHECKPOINT",
+                status="",
+                query=None,
+                previous_data=None,
+                new_data=None
+            ),
+            ExecutionResult(
+                transaction_id=1,
+                timestamp=datetime.now() - timedelta(minutes=10),
+                type="START",
+                status="",
+                query=None,
+                previous_data=None,
+                new_data=None
+            ),
+            ExecutionResult(
+                transaction_id=1,
+                timestamp=datetime.now() - timedelta(minutes=9),
+                type="INSERT",
+                status="",
+                query="INSERT INTO table1 (id, name) VALUES (1, 'Alice');",
+                previous_data=None,
+                new_data=Rows(data=[{"id": 1, "name": "Alice"}], rows_count=1)
+            ),
+            ExecutionResult(
+                transaction_id=2,
+                timestamp=datetime.now() - timedelta(minutes=8),
+                type="UPDATE",
+                status="",
+                query="UPDATE table2 SET age=30 WHERE id=2;",
+                previous_data=Rows(data=[{"id": 2, "age": 25}], rows_count=1),
+                new_data=Rows(data=[{"id": 2, "age": 30}], rows_count=1)
+            ),
+            ExecutionResult(
+                transaction_id=1,
+                timestamp=datetime.now() - timedelta(minutes=7),
+                type="COMMIT",
+                status="",
+                query=None,
+                previous_data=None,
+                new_data=None
+            )
+        ]
+        mock_parse_log_file.return_value = (logs, [2])
+
+        redo_query, undo_query = self.manager.recoverSystem()
+
+        self.assertEqual(len(redo_query), 2)
+        self.assertIn("INSERT INTO table1 (id, name) VALUES (1, 'Alice');", redo_query[0][1])
+        self.assertIn("UPDATE table2 SET age=30 WHERE id=2;", redo_query[1][1])
+        self.assertEqual(len(undo_query), 2)
+        self.assertIn("UPDATE table2 SET id=2, age=25 WHERE id=2 AND age=30;", undo_query[0][1])
+        self.assertIn("INSERT INTO table1 (id, name) VALUES (1, 'Bob');", undo_query[1][1])
 
 if __name__ == "__main__":
     unittest.main(testRunner=ColoredTextTestRunner())

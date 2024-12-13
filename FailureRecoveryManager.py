@@ -157,7 +157,9 @@ class FailureRecoveryManager:
                         with open(self.log_file, 'a') as log_file:
                             for entry in self.memory_wal:
                                 query_value = entry.query if entry.query else "None"  
-                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
+                                previous_data = entry.previous_data.data if entry.previous_data else []
+                                new_data = entry.new_data.data if entry.new_data else []
+                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {previous_data},After: {new_data}"
                                 log_file.write(log_entry + '\n')
 
                         self.memory_wal.clear()
@@ -172,7 +174,9 @@ class FailureRecoveryManager:
                         with open(self.log_file, 'a') as log_file:
                             for entry in self.memory_wal:
                                 query_value = entry.query if entry.query else "None"  
-                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
+                                previous_data = entry.previous_data.data if entry.previous_data else []
+                                new_data = entry.new_data.data if entry.new_data else []
+                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {previous_data},After: {new_data}"
                                 log_file.write(log_entry + '\n')
 
                         self.memory_wal.clear()
@@ -193,8 +197,11 @@ class FailureRecoveryManager:
                     try:
                         with open(self.log_file, "a") as log_file:
                             for entry in self.memory_wal:
-                                query_value = entry.query if entry.query else "None"  
-                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {entry.previous_data.data},After: {entry.new_data.data}"
+                                query_value = entry.query if entry.query else "None"
+                                # Handle None for previous_data and new_data
+                                previous_data = entry.previous_data.data if entry.previous_data else []
+                                new_data = entry.new_data.data if entry.new_data else []
+                                log_entry = f"{entry.type},{entry.transaction_id},{entry.timestamp.isoformat()},{query_value},Before: {previous_data},After: {new_data}"
                                 log_file.write(log_entry + '\n')
                     except Exception as e:
                         print(f"Error writing WAL during checkpoint: {e}")
@@ -224,16 +231,25 @@ class FailureRecoveryManager:
     def build_update_query(self, table_name: str, before: Rows, after: Rows) -> List[str]:
         queries = []
         for before_row, after_row in zip(before.data, after.data):
-            set_clause = ", ".join(f"{k}='{v}'" for k, v in before_row.items())
-            condition = " AND ".join(f"{k}='{v}'" for k, v in after_row.items())
+            # Format SET clause
+            set_clause = ", ".join(
+                f"{k}={repr(v) if isinstance(v, str) else v}" for k, v in before_row.items()
+            )
+            # Format WHERE clause
+            condition = " AND ".join(
+                f"{k}={repr(v) if isinstance(v, str) else v}" for k, v in after_row.items()
+            )
             query = f"UPDATE {table_name} SET {set_clause} WHERE {condition};"
             queries.append(query)
         return queries
 
     # Build a DELETE query to undo an INSERT operation
     def build_delete_query(self, table_name: str, after: Rows) -> List[str]:
-        condition = " AND ".join(f"{k}='{v}'" for row in after.data for k, v in row.items())
+        condition = " AND ".join(
+            f"{k}={repr(v) if isinstance(v, str) else v}" for row in after.data for k, v in row.items()
+        )
         return [f"DELETE FROM {table_name} WHERE {condition};"]
+
     
     # Build an INSERT query to undo a DELETE operation
     def build_insert_query(self, table_name: str, before: Rows, after: Rows) -> List[str]:
@@ -243,11 +259,12 @@ class FailureRecoveryManager:
         filtered_before = [row for row in before.data if tuple(row.items()) not in after_set]
 
         if not filtered_before:
-            return [] 
+            return []
 
+        # Format columns and values
         columns = ", ".join(filtered_before[0].keys())
         values_list = [
-            "(" + ", ".join(f"'{v}'" if isinstance(v, str) else str(v) for v in row.values()) + ")"
+            "(" + ", ".join(repr(v) if isinstance(v, str) else str(v) for v in row.values()) + ")"
             for row in filtered_before
         ]
         return [f"INSERT INTO {table_name} ({columns}) VALUES {', '.join(values_list)};"]
@@ -328,13 +345,14 @@ class FailureRecoveryManager:
                             self.undo_list.remove(checkcurr_transaction_id)
                         else:
                             if (checkcurr_transaction_id in undo_list):
-                                table_name = self.get_table_name(log_entry.query)
-                                query_type = log_entry.query.split()[0]
-                                if query_type == "UPDATE":
+                                if log_entry.type == "UPDATE":
+                                    table_name = self.get_table_name(log_entry.query)
                                     undo_query = self.build_update_query(table_name, log_entry.previous_data, log_entry.new_data)
-                                elif query_type == "INSERT":
+                                elif log_entry.type == "INSERT":
+                                    table_name = self.get_table_name(log_entry.query)
                                     undo_query = self.build_delete_query(table_name, log_entry.new_data)
-                                elif query_type == "DELETE":
+                                elif log_entry.type == "DELETE":
+                                    table_name = self.get_table_name(log_entry.query)
                                     undo_query = self.build_insert_query(table_name, log_entry.previous_data, log_entry.new_data)
                                 else:
                                     continue
@@ -368,8 +386,7 @@ class FailureRecoveryManager:
                 last_checkpoint = None
                 for log in reversed(logs):
                     if log.type == "CHECKPOINT":
-                        last_checkpoint = log
-
+                        last_checkpoint = log 
                 redo_start_index = logs.index(last_checkpoint) + 1 if last_checkpoint else 0
 
                 redo_query = []
@@ -386,33 +403,31 @@ class FailureRecoveryManager:
 
                 # UNDO Phase
 
-                undo_query = []
+                undo_queries = []
                 for log in reversed(logs):
+                    undo_query = []
                     if not self.undo_list:
                         break
 
                     if log.transaction_id in self.undo_list:
-                        if log.previous_data and log.new_data:
-
-                            query_words = log.query.split()
-                            query_type = log.type
-                            table_name = self.get_table_name(log.query)
-
-                            if query_type == "UPDATE":
-                                undo_query.extend([log.transaction_id, self.build_update_query(table_name, log.previous_data, log.new_data)])
-                            elif query_type == "INSERT":
-                                undo_query.extend([log.transaction_id, self.build_delete_query(table_name, log.new_data)])
-                            elif query_type == "DELETE":
-                                undo_query.extend([log.transaction_id, self.build_insert_query(table_name, log.previous_data)])
+                        if log.status == "START":
+                            self.undo_list.remove(log.transaction_id)
+                        else:
+                            if log.type == "UPDATE":
+                                table_name = self.get_table_name(log.query)
+                                undo_query = self.build_update_query(table_name, log.previous_data, log.new_data)
+                            elif log.type == "INSERT":
+                                table_name = self.get_table_name(log.query)
+                                undo_query = self.build_delete_query(table_name, log.new_data)
+                            elif log.type == "DELETE":
+                                table_name = self.get_table_name(log.query)
+                                undo_query = self.build_insert_query(table_name, log.previous_data, log.new_data)
                             else:
                                 continue
+                            for query in undo_query:
+                                    undo_queries.append([log.transaction_id, query])
 
-                            ## pass to processor
-
-                        elif log.status == "START":
-                            # Write an ABORT log and remove transaction from undo list
-                            self.undo_list.remove(log.transaction_id)
-            return redo_query, undo_query
+            return redo_query, undo_queries
         except Exception as e:
             print(f"Error during system recovery: {e}")
             return redo_query, undo_query

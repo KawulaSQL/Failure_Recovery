@@ -2,9 +2,16 @@
 
 import sys
 import unittest
+
+from unittest.mock import patch
+
+
+from typing import ByteString
+
+sys.path.append('./Storage_Manager')
 from Storage_Manager.lib.Block import Block, BLOCK_SIZE, DATA_SIZE
 from Buffer import Buffer, DoublyLinkedListNode, DoublyLinkedList
-from typing import ByteString
+
 
 class ColoredTextTestResult(unittest.TextTestResult):
     GREEN = "\033[92m"
@@ -29,6 +36,7 @@ class ColoredTextTestResult(unittest.TextTestResult):
 
 class ColoredTextTestRunner(unittest.TextTestRunner):
     resultclass = ColoredTextTestResult
+
 class TestBuffer(unittest.TestCase):
     def setUp(self):
         """
@@ -152,7 +160,8 @@ class TestBuffer(unittest.TestCase):
         delete_result = self.buffer.delete("TableB", 2)
         self.assertFalse(delete_result)
     
-    def test_flush_buffer(self):
+    @patch("Storage_Manager.lib.Block.Block.write_block")
+    def test_flush_buffer(self, mock_write_block):
         """
         Test flushing (clearing) the buffer.
         """
@@ -163,6 +172,14 @@ class TestBuffer(unittest.TestCase):
         
         # Flush the buffer
         self.buffer.flush()
+
+        # Verify that write_block was called for each block
+        self.assertEqual(mock_write_block.call_count, 3)
+
+        # Verify that all blocks were written with correct parameters
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableA_table.bin", 1)
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableA_table.bin", 2)
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableB_table.bin", 1)
         
         # Ensure all blocks are removed
         self.assertIsNone(self.buffer.get("TableA", 1))
@@ -172,6 +189,7 @@ class TestBuffer(unittest.TestCase):
         # Ensure buffer is empty
         all_blocks = self.buffer.get_all_blocks()
         self.assertEqual(len(all_blocks), 0)
+    
     
     def test_get_all_blocks(self):
         """
@@ -200,7 +218,8 @@ class TestBuffer(unittest.TestCase):
         self.assertIn(self.block4, all_blocks)
         self.assertIn(self.block2, all_blocks)  # block2 should be evicted
     
-    def test_flush_and_set(self):
+    @patch("Storage_Manager.lib.Block.Block.write_block")
+    def test_flush_and_set(self, mock_write_block):
         """
         Test setting new blocks after flushing the buffer.
         """
@@ -208,6 +227,15 @@ class TestBuffer(unittest.TestCase):
         self.buffer.set("TableA", 1, self.block1)
         self.buffer.set("TableB", 2, self.block2)
         self.buffer.flush()
+
+        # Verify that all blocks were written with correct parameters
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableA_table.bin", 1)
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableB_table.bin", 2)
+        
+        # Ensure all blocks are removed
+        self.assertIsNone(self.buffer.get("TableA", 1))
+        self.assertIsNone(self.buffer.get("TableA", 2))
+        self.assertIsNone(self.buffer.get("TableB", 1))
         
         # Add new blocks after flush
         self.buffer.set("TableC", 3, self.block3)
@@ -221,7 +249,8 @@ class TestBuffer(unittest.TestCase):
         self.assertIsNone(self.buffer.get("TableA", 1))
         self.assertIsNone(self.buffer.get("TableB", 2))
     
-    def test_delete_after_flush(self):
+    @patch("Storage_Manager.lib.Block.Block.write_block")
+    def test_delete_after_flush(self, mock_write_block):
         """
         Test deleting blocks after flushing the buffer.
         """
@@ -229,6 +258,8 @@ class TestBuffer(unittest.TestCase):
         self.buffer.set("TableA", 1, self.block1)
         self.buffer.set("TableB", 2, self.block2)
         self.buffer.flush()
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableA_table.bin", 1)
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableB_table.bin", 2)
         
         # Attempt to delete a block that was flushed
         delete_result = self.buffer.delete("TableA", 1)
@@ -365,7 +396,8 @@ class TestBuffer(unittest.TestCase):
         expected_str = f"('TableB', 2): {self.block2} <-> ('TableA', 1): {self.block1}"
         self.assertEqual(buffer_str, expected_str)
     
-    def test_flush_buffer_multiple_times(self):
+    @patch("Storage_Manager.lib.Block.Block.write_block")
+    def test_flush_buffer_multiple_times(self, mock_write_block):
         """
         Test flushing the buffer multiple times.
         """
@@ -375,6 +407,10 @@ class TestBuffer(unittest.TestCase):
         
         # First flush
         self.buffer.flush()
+
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableA_table.bin", 1)
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableB_table.bin", 2)
+
         self.assertIsNone(self.buffer.get("TableA", 1))
         self.assertIsNone(self.buffer.get("TableB", 2))
         self.assertEqual(len(self.buffer.get_all_blocks()), 0)
@@ -406,7 +442,8 @@ class TestBuffer(unittest.TestCase):
         self.assertIsNotNone(self.buffer.get("TableC", 1))
         self.assertIsNotNone(self.buffer.get("TableD", 2))
     
-    def test_get_all_blocks_after_flush_and_set(self):
+    @patch("Storage_Manager.lib.Block.Block.write_block")
+    def test_get_all_blocks_after_flush_and_set(self, mock_write_block):
         """
         Test retrieving all blocks after flushing and setting new blocks.
         """
@@ -414,6 +451,9 @@ class TestBuffer(unittest.TestCase):
         self.buffer.set("TableA", 1, self.block1)
         self.buffer.set("TableB", 2, self.block2)
         self.buffer.flush()
+
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableA_table.bin", 1)
+        mock_write_block.assert_any_call("../Storage_Manager/storage/TableB_table.bin", 2)
         
         # Add new blocks
         self.buffer.set("TableC", 3, self.block3)
