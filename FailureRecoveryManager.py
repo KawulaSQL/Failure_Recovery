@@ -429,7 +429,7 @@ if __name__ == "__main__":
     failurerec = FailureRecoveryManager()
 
     print("\nExecution Result:")
-    res = failurerec.parse_log_file("./wal.log")
+    res, undo_list = failurerec.parse_log_file("./wal.log")
     for i in res:
         print("Type: " + str(i.type))
         print("Transaction id: " + str(i.transaction_id))
