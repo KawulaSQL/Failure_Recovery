@@ -34,9 +34,8 @@ class FailureRecoveryManager:
     # Class-level attributes
     _checkpoint_thread_started = False
     _checkpoint_lock = threading.Lock()
-    _instances = []
-    _shutdown_event = threading.Event()
     _checkpoint_thread = None
+    _leader_instance = None 
 
     def __init__(self, log_file='wal.log', log_size=50):
         self.memory_wal: List[ExecutionResult] = []
@@ -52,7 +51,8 @@ class FailureRecoveryManager:
             with open(self.log_file, 'w') as f:
                 pass
         with FailureRecoveryManager._checkpoint_lock:
-            FailureRecoveryManager._instances.append(self)
+            if FailureRecoveryManager._leader_instance is None:
+                FailureRecoveryManager._leader_instance = self
 
         # Start the checkpointing thread if not already started
         self._start_checkpointing_thread()
@@ -74,23 +74,14 @@ class FailureRecoveryManager:
                 time.sleep(300)  # Corrected to use time.sleep
                 # Iterate over instances and save checkpoint
                 with cls._checkpoint_lock:
-                    for instance in cls._instances:
+                    if cls._leader_instance:
                         try:
-                            instance.save_checkpoint()
+                            cls._leader_instance.save_checkpoint()
                         except Exception as e:
-                            print(f"Error during checkpointing for instance {instance}: {e}")
+                            print(f"Error during checkpointing for leader {cls._leader_instance}: {e}")
             except Exception as e:
                 print(f"Error in checkpoint loop: {e}")
     
-    @classmethod
-    def shutdown(cls):
-        """Signal the checkpointing thread to terminate."""
-        cls._shutdown_event.set()
-        if cls._checkpoint_thread is not None:
-            cls._checkpoint_thread.join(timeout=1)  # Wait briefly for thread to exit
-            cls._checkpoint_thread = None
-        cls._checkpoint_thread_started = False
-        cls._instances.clear()
          
     def parse_log_file(self, file_path: str) -> List[ExecutionResult]:
         execution_results = []
@@ -426,70 +417,3 @@ class FailureRecoveryManager:
             print(f"Error during system recovery: {e}")
             return redo_query, undo_query
 
-if __name__ == "__main__":
-
-    failurerec = FailureRecoveryManager()
-
-    print("\nExecution Result:")
-    res, undo_list = failurerec.parse_log_file("./wal.log")
-    for i in res:
-        print("Type: " + str(i.type))
-        print("Transaction id: " + str(i.transaction_id))
-        print("Timestamp: " + str(i.timestamp))
-        print("Query: " + str(i.query))
-
-        # Check if previous data exists before accessing it
-        if i.previous_data is not None:
-            print("Previous data: " + str(i.previous_data.data))
-            print("Previous rows count: " + str(i.previous_data.rows_count))
-        else:
-            print("Previous data: None")
-            print("Previous rows count: 0")
-
-        # Check if updated data exists before accessing it
-        if i.new_data is not None:
-            print("After data: " + str(i.new_data.data))
-            print("After rows count: " + str(i.new_data.rows_count))
-        else:
-            print("After data: None")
-            print("After rows count: 0")
-
-    #     print("")
-    #     print("")
-
-    failurerec.write_log(ExecutionResult(
-                transaction_id=1,
-                timestamp=datetime.datetime.now(),
-                type="ACTIVE",
-                previous_data=Rows([{'id': 1, 'name': 'old_value'}], 1),
-                new_data=Rows([{'id': 1, 'name': 'new_value'}], 1),
-                query="UPDATE table_name SET name='new_value' WHERE id=1",
-                status=""
-            ))
-    
-    # failurerec.save_checkpoint()
-    criteria = RecoverCriteria([1,2],None)
-    failurerec.recover(criteria)
-    # failurerec.save_checkpoint()
-    criteria = RecoverCriteria([1,2],None)
-    failurerec.recover(criteria)
-
-""" Cek recover pakai ini dah So far udh aman
-ACTIVE,1,2024-11-22T10:00:00,Query: UPDATE table_name SET name='new_value' WHERE id=1,Before: [{'id': 1, 'name': 'old_value'}],After: [{'id': 1, 'name': 'new_value'}]
-ACTIVE,1,2024-11-22T10:00:00,Query: UPDATE table_name SET name='new_value' WHERE name='old_value',Before: [{'id': 1, 'name': 'old_value'}],After: [{'id': 1, 'name': 'new_value'}]
-START,3,2024-11-22T10:10:00,Query: DELETE FROM table_name WHERE id=1,Before: [{'id': 1, 'name': 'new_value'},{'id': 1, 'name': 'new_value2'}],After: []
-START,3,2024-11-22T10:10:00,Query: DELETE FROM table_name WHERE id=1,Before: [{'id': 1, 'name': 'new_value'},{'id': 1, 'name': 'new_value2'},{'id': 2, 'name': 'OLD_value'}],After: [{'id': 2, 'name': 'OLD_value'}]
-COMMIT,2,2024-11-22T10:05:00,Query: INSERT INTO table_name (id, name) VALUES (2, 'another_value'),Before: [],After: [{'id': 2, 'name': 'another_value'}]
-ABORT,4,2024-11-22T10:15:00,Query: UPDATE table_name SET name='updated_value' WHERE name='another_value',Before: [{'id': 2, 'name': 'another_value'},{'id': 3, 'name': 'another_value'}],After: [{'id': 2, 'name': 'updated_value'},{'id': 3, 'name': 'updated_value'}]
-ABORT,5,2024-11-22T10:15:00,Query: UPDATE table_name SET name='updated_value' WHERE name='another_value',Before: [{'id': 2, 'name': 'another_value'},{'id': 3, 'name': 'another_value'}],After: [{'id': 2, 'name': 'updated_value'},{'id': 3, 'name': 'updated_value'}]
-END,6,2024-11-22T10:20:00,Query: SELECT * FROM table_name,Before: [],After: []
-"""
-
-"""
-
-COMMIT,2,2024-11-22T10:05:00,None,Before: [],After: []
-ROLLBACK,2,2024-11-22T10:05:00,None,Before: [],After: []
-START,3,2024-11-22T10:10:00,DELETE FROM table_name WHERE id=1,Before: [{'id': 1, 'name': 'new_value'}],After: []
-ABORT,4,2024-11-22T10:15:00,None,Before: [],After: []
-CHECKPOINT,2024-11-22T10:20:00,[1,2]
-"""
