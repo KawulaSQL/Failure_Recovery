@@ -39,8 +39,8 @@ class TestFailureRecoveryManager(unittest.TestCase):
         FailureRecoveryManager._checkpoint_thread_started = False
         FailureRecoveryManager._instances = []
         FailureRecoveryManager._shutdown_event.clear()
-        self.mock_file = "mock_wal.log"
-        self.manager = FailureRecoveryManager()
+        self.mock_file = "test.log"
+        self.manager = FailureRecoveryManager(log_file=self.mock_file)
 
 
     @patch("builtins.open", new_callable=mock_open)
@@ -517,7 +517,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             [1,"UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
-        mock_parse_log_file.assert_called_once_with("./wal.log")
+        mock_parse_log_file.assert_called_once_with(self.mock_file)
 
     @patch("FailureRecoveryManager.FailureRecoveryManager.parse_log_file")
     def test_recover_handles_multiple_transactions(self, mock_parse_log_file):
@@ -578,7 +578,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             
         ]
         self.assertEqual(undo_queries, expected_queries)
-        mock_parse_log_file.assert_called_once_with("./wal.log")
+        mock_parse_log_file.assert_called_once_with(self.mock_file)
 
     @patch("FailureRecoveryManager.FailureRecoveryManager.parse_log_file")
     def test_recover_handles_delete(self, mock_parse_log_file):
@@ -619,7 +619,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             [3,"INSERT INTO table_name (id, name) VALUES (3, 'deleted_entry');"]
         ]
         self.assertEqual(undo_queries, expected_queries)
-        mock_parse_log_file.assert_called_once_with("./wal.log")
+        mock_parse_log_file.assert_called_once_with(self.mock_file)
 
     @patch("FailureRecoveryManager.FailureRecoveryManager.parse_log_file")
     @patch("builtins.print")
@@ -660,7 +660,7 @@ class TestFailureRecoveryManager(unittest.TestCase):
             [1, "UPDATE table_name SET id='1', name='old_value' WHERE id='1' AND name='new_value';"]
         ]
         self.assertEqual(undo_queries, expected_queries)
-        mock_parse_log_file.assert_called_once_with("./wal.log")
+        mock_parse_log_file.assert_called_once_with(self.mock_file)
 
 
     @patch("builtins.print")
@@ -770,6 +770,163 @@ class TestFailureRecoveryManager(unittest.TestCase):
         expected_queries = []
         self.assertEqual(undo_queries, expected_queries)
         mock_parse_log_file.assert_not_called()
+
+    def test_recovery_scenario(self):
+        """
+        This test simulates a scenario of multiple transactions performing a sequence of operations:
+        - Transaction 100: START -> INSERT -> UPDATE -> COMMIT
+        - Transaction 101: START -> INSERT -> UPDATE -> NO COMMIT (will remain in undo_list)
+        - Transaction 102: START -> DELETE -> NO COMMIT (will remain in undo_list)
+        
+        We then call recover with criteria to undo transactions 101 and 102 and verify
+        that the generated undo queries match what we expect based on the logged operations.
+        """
+
+        # Prepare some dummy data rows
+        before_insert_data = Rows(data=[], rows_count=0)
+        after_insert_data = Rows(data=[{"id": "1", "name": "Alice"}], rows_count=1)
+
+        before_update_data = Rows(data=[{"id": "1", "name": "Alice"}], rows_count=1)
+        after_update_data = Rows(data=[{"id": "1", "name": "Alicia"}], rows_count=1)
+
+        before_delete_data = Rows(data=[{"id": "2", "name": "Bob"}], rows_count=1)
+        after_delete_data = Rows(data=[], rows_count=0)
+
+        # Transaction 100: Will be fully committed
+        # START
+        start_100 = ExecutionResult(
+            transaction_id=100,
+            timestamp=datetime.now(),
+            type="START",
+            status="",
+            query="START TRANSACTION;",
+            previous_data=before_insert_data,
+            new_data=after_insert_data
+        )
+        self.manager.write_log(start_100)
+
+        # INSERT
+        insert_100 = ExecutionResult(
+            transaction_id=100,
+            timestamp=datetime.now(),
+            type="INSERT",
+            status="",
+            query="INSERT INTO test (id, name) VALUES ('1','Alice');",
+            previous_data=before_insert_data,
+            new_data=after_insert_data
+        )
+        self.manager.write_log(insert_100)
+
+        # UPDATE
+        update_100 = ExecutionResult(
+            transaction_id=100,
+            timestamp=datetime.now(),
+            type="UPDATE",
+            status="",
+            query="UPDATE test SET name='Alicia' WHERE id='1';",
+            previous_data=before_update_data,
+            new_data=after_update_data
+        )
+        self.manager.write_log(update_100)
+
+        # COMMIT transaction 100
+        commit_100 = ExecutionResult(
+            transaction_id=100,
+            timestamp=datetime.now(),
+            type="COMMIT",
+            status="",
+            query="COMMIT;",
+            previous_data=before_insert_data,
+            new_data=after_insert_data
+        )
+        self.manager.write_log(commit_100)
+
+        # Transaction 101: Will not commit
+        start_101 = ExecutionResult(
+            transaction_id=101,
+            timestamp=datetime.now(),
+            type="START",
+            status="",
+            query="START TRANSACTION;",
+            previous_data=before_insert_data,
+            new_data=after_insert_data
+        )
+        self.manager.write_log(start_101)
+
+        insert_101 = ExecutionResult(
+            transaction_id=101,
+            timestamp=datetime.now(),
+            type="INSERT",
+            status="",
+            query="INSERT INTO test (id, name) VALUES ('3','Charlie');",
+            previous_data=before_insert_data,
+            new_data=Rows(data=[{"id": "3", "name": "Charlie"}], rows_count=1)
+        )
+        self.manager.write_log(insert_101)
+
+        update_101 = ExecutionResult(
+            transaction_id=101,
+            timestamp=datetime.now(),
+            type="UPDATE",
+            status="",
+            query="UPDATE test SET name='Charles' WHERE id='3';",
+            previous_data=Rows(data=[{"id": "3", "name": "Charlie"}], rows_count=1),
+            new_data=Rows(data=[{"id": "3", "name": "Charles"}], rows_count=1)
+        )
+        self.manager.write_log(update_101)
+        # No COMMIT for transaction 101
+
+        # Transaction 102: Will not commit (DELETE case)
+        start_102 = ExecutionResult(
+            transaction_id=102,
+            timestamp=datetime.now(),
+            type="START",
+            status="",
+            query="START TRANSACTION;",
+            previous_data=before_delete_data,
+            new_data=after_delete_data
+        )
+        self.manager.write_log(start_102)
+        
+        start_104 = ExecutionResult(
+            transaction_id=104,
+            timestamp=datetime.now(),
+            type="START",
+            status="",
+            query="START TRANSACTION;",
+            previous_data=before_delete_data,
+            new_data=after_delete_data
+        )
+        self.manager.write_log(start_104)
+        delete_102 = ExecutionResult(
+            transaction_id=102,
+            timestamp=datetime.now(),
+            type="DELETE",
+            status="",
+            query="DELETE FROM test WHERE id='2';",
+            previous_data=before_delete_data,
+            new_data=after_delete_data
+        )
+        self.manager.write_log(delete_102)
+
+        self.manager.save_checkpoint()
+
+        criteria = RecoverCriteria(transaction_id=[101, 102], timestamp=None)
+        undo_queries = self.manager.recover(criteria)
+
+
+        expected_101_update_undo = "UPDATE test SET id='3', name='Charlie' WHERE id='3' AND name='Charles';"
+        expected_101_insert_undo = "DELETE FROM test WHERE id='3' AND name='Charlie';"   
+        expected_102_delete_undo = "INSERT INTO test (id, name) VALUES ('2', 'Bob');"
+        received_101 = [q for (tid, q) in undo_queries if tid == 101]
+        received_102 = [q for (tid, q) in undo_queries if tid == 102]
+
+        self.assertEqual(len(received_101), 2)
+        self.assertEqual(len(received_102), 1)
+
+        self.assertIn(expected_101_update_undo, received_101)
+        self.assertIn(expected_101_insert_undo, received_101)
+        self.assertIn(expected_102_delete_undo, received_102)
 
 if __name__ == "__main__":
     unittest.main(testRunner=ColoredTextTestRunner())

@@ -100,7 +100,7 @@ class FailureRecoveryManager:
                 with open(file_path, 'r') as file:
                     for line in file:
                         if line.startswith('CHECKPOINT'):
-                            match = re.match(r"CHECKPOINT,([\d\-T:]+),(\[.*\])", line)
+                            match = re.match(r"CHECKPOINT,([\d\-T:\.]+),(\[.*\])", line)
                             if match:
                                 timestamp = datetime.datetime.fromisoformat(match.group(1))
                                 try:
@@ -119,7 +119,7 @@ class FailureRecoveryManager:
                                 except Exception as e:
                                     print(f"Error parsing CHECKPOINT line: {e}")
                         else:
-                            match = re.match(r"(\w+),(\d+),([\d\-T:]+),(.+?),Before: (.*?),After: (.*)", line)
+                            match = re.match(r"(\w+),(\d+),([\d\-T:\.]+),(.+?),Before: (.*?),After: (.*)", line)
                             if match:
                                 type = match.group(1)
                                 transaction_id = int(match.group(2))
@@ -293,6 +293,7 @@ class FailureRecoveryManager:
                 # If the transaction id that we want to undo is now empty then stop
                 done_undo = False
                 for exec_result in reversed(self.memory_wal):
+                    undo_query= []
                     if (len(undo_list)==0):
                         done_undo = True
                         break   
@@ -300,6 +301,7 @@ class FailureRecoveryManager:
                     if (checkcurr_transaction_id in undo_list):
                         if exec_result.type == "START":
                             undo_list.remove(checkcurr_transaction_id)
+                            self.undo_list.remove(checkcurr_transaction_id)
                             undo_query= []
                         elif exec_result.type == "UPDATE":
                             table_name = self.get_table_name(exec_result.query)
@@ -323,13 +325,17 @@ class FailureRecoveryManager:
                 if (done_undo==False):
                     if not os.path.exists(self.log_file):
                         raise Exception("No log file. Abort")
-                    logs, last_undo_list = self.parse_log_file("./wal.log")
+                    logs, last_undo_list = self.parse_log_file(self.log_file)
                     for log_entry in reversed(logs):
+                        undo_query = []
                         checkcurr_transaction_id = log_entry.transaction_id
                         if (len(undo_list)==0):
                             done_undo = True
                             break
-                        if(log_entry.query!=None):
+                        if log_entry.type == "START" and checkcurr_transaction_id in undo_list:
+                            undo_list.remove(checkcurr_transaction_id)
+                            self.undo_list.remove(checkcurr_transaction_id)
+                        else:
                             if (checkcurr_transaction_id in undo_list):
                                 table_name = self.get_table_name(log_entry.query)
                                 query_type = log_entry.query.split()[0]
@@ -343,10 +349,6 @@ class FailureRecoveryManager:
                                     continue
                                 for query in undo_query:
                                     undo_queries.append([checkcurr_transaction_id, query])
-                        else:
-                            if log_entry.type == "START" and checkcurr_transaction_id in undo_list:
-                                undo_list.remove(checkcurr_transaction_id)
-
                 return undo_queries
         except Exception as e:
             print(f"Error during recovery: {e}")
@@ -366,7 +368,7 @@ class FailureRecoveryManager:
         # Parse the log file to retrieve all logs
         try:
             with self.lock:
-                logs, undo_list = self.parse_log_file("./wal.log")
+                logs, undo_list = self.parse_log_file(self.log_file)
                 if not logs:
                     return
 
